@@ -41399,3 +41399,135 @@ body.settings-sidebar-resize-active {
     display: none;
   }
 }
+
+/* ============================================================
+   HOST STATS panel — reactor-console host hardware monitor.
+   Dionysus-reactor look (bracketed [ LABELS ], segmented bars,
+   monospace) painted with Odysseus theme tokens so it stays
+   native and honors the active light/dark theme.
+   ============================================================ */
+.hoststats-content {
+  width: min(560px, 94vw);
+  max-height: 88vh;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+}
+.hoststats-header { align-items: center; }
+.hoststats-header h4 { color: var(--fg); }
+.hoststats-header-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.hoststats-live-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent-primary, var(--fg));
+  box-shadow: 0 0 6px var(--accent-primary, var(--fg));
+  animation: hs-pulse 1.5s ease-in-out infinite;
+}
+.hoststats-live-dot.stale { background: var(--red, #e06c75); box-shadow: none; animation: none; }
+@keyframes hs-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.hoststats-body {
+  font-family: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+  color: var(--fg);
+  padding: 14px 16px 16px;
+  overflow-y: auto;
+}
+.hoststats-loading, .hs-empty {
+  color: var(--fg);
+  opacity: 0.75;
+  letter-spacing: 1px;
+  padding: 10px 2px;
+  font-size: 12px;
+}
+.hs-empty { border: 1px dashed var(--border); border-radius: 4px; margin-bottom: 10px; padding: 8px 10px; }
+
+.hs-section-label {
+  color: var(--accent-primary, var(--fg));
+  letter-spacing: 2px;
+  font-size: 11px;
+  text-transform: uppercase;
+  margin: 14px 0 8px;
+  opacity: 0.85;
+}
+.hs-section-label:first-child { margin-top: 0; }
+
+/* GPU cards */
+.hs-gpu-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+@media (min-width: 460px) { .hs-gpu-grid { grid-template-columns: 1fr 1fr; } }
+.hs-gpu {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 10px 11px 11px;
+  background: linear-gradient(to top, color-mix(in srgb, var(--panel) 45%, transparent), transparent);
+  min-width: 0; /* let grid items shrink so the 2-col layout never overflows */
+}
+.hs-gpu-title {
+  color: var(--fg);
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  margin-bottom: 9px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hs-metric { margin-bottom: 9px; }
+.hs-metric:last-child { margin-bottom: 0; }
+.hs-metric-head {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+  color: var(--fg); opacity: 0.8; margin-bottom: 4px;
+  min-width: 0;
+}
+.hs-metric-head > span:first-child { flex-shrink: 0; }
+.hs-metric-num { opacity: 1; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Segmented bar */
+.hs-bar { display: flex; gap: 2px; height: 14px; }
+.hs-seg {
+  flex: 1;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+.hs-seg.on {
+  background: var(--accent-primary, var(--fg));
+  border-color: var(--accent-primary, var(--fg));
+  box-shadow: 0 0 4px color-mix(in srgb, var(--accent-primary, var(--fg)) 55%, transparent);
+}
+.hs-warn .hs-seg.on { background: var(--accent-warm, #d19a66); border-color: var(--accent-warm, #d19a66); box-shadow: 0 0 4px color-mix(in srgb, var(--accent-warm, #d19a66) 55%, transparent); }
+.hs-hot .hs-seg.on  { background: var(--red, #e06c75); border-color: var(--red, #e06c75); box-shadow: 0 0 5px color-mix(in srgb, var(--red, #e06c75) 60%, transparent); }
+.hs-bar-na .hs-seg { opacity: 0.4; }
+
+/* Temp read-out (big) */
+.hs-metric-temp .hs-metric-head { margin-bottom: 2px; }
+.hs-temp-read { font-size: 20px; font-weight: 600; letter-spacing: 1px; font-variant-numeric: tabular-nums; }
+.hs-ok { color: var(--fg); }
+.hs-warn.hs-temp-read, .hs-temp-read.hs-warn { color: var(--accent-warm, #d19a66); }
+.hs-hot.hs-temp-read, .hs-temp-read.hs-hot { color: var(--red, #e06c75); }
+
+/* Model loaded */
+.hs-models { display: flex; flex-direction: column; gap: 6px; }
+.hs-model {
+  border: 1px solid var(--border); border-radius: 4px; padding: 7px 10px;
+  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+}
+.hs-model-name { color: var(--fg); font-size: 12px; }
+.hs-model-meta { color: var(--fg); opacity: 0.65; font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* System (CPU + RAM) */
+.hs-sys { display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--border); border-radius: 5px; padding: 11px; }
+
+/* Footer */
+.hs-foot {
+  margin-top: 14px; padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  font-size: 10px; letter-spacing: 1px; color: var(--fg); opacity: 0.6;
+  display: flex; justify-content: space-between;
+}
+.hs-foot-ts { opacity: 0.8; }
+
+/* Host Stats sits above other tool windows like Cookbook does. */
+#hoststats-modal { z-index: 262; }
