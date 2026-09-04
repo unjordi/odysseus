@@ -30,6 +30,7 @@ function fmtSize(bytes) {
 // una nota si NO cabe en VRAM (offload) o no cabe ni con offload (no elegible).
 function modelLabel(m) {
   const bits = [];
+  if (m.engine === 'freetoken') bits.push('FreeToken · MoE');
   if (m.params) bits.push(`${m.params}B`);
   const size = fmtSize(m.sizeBytes);
   if (size) bits.push(size);
@@ -56,7 +57,7 @@ function render(snap) {
 
   modelSel.innerHTML = '';
   const models = Array.isArray(snap.models) ? snap.models : [];
-  if (!snap.ollamaUp || models.length === 0) {
+  if (models.length === 0) {
     const opt = document.createElement('option');
     opt.value = '';
     opt.textContent = snap.ollamaUp ? 'sin modelos instalados' : 'ollama no responde';
@@ -84,9 +85,11 @@ function render(snap) {
   modeSel.value = snap.mode === 'plan' ? 'plan' : 'build';
 
   if (ollamaLine) {
-    ollamaLine.textContent = snap.ollamaUp
-      ? `ollama activo · ${models.length} modelo(s) instalado(s)`
-      : 'ollama no responde — sin modelos locales (axon corre frontier-only)';
+    const ollamaModels = models.filter((m) => m.engine !== 'freetoken').length;
+    const ftModels = models.filter((m) => m.engine === 'freetoken').length;
+    const parts = [snap.ollamaUp ? `ollama activo · ${ollamaModels} modelo(s)` : 'ollama no responde'];
+    if (ftModels > 0) parts.push(`FreeToken activo · ${ftModels} modelo(s)`);
+    ollamaLine.textContent = parts.join(' · ');
   }
 }
 
