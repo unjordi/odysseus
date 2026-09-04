@@ -40,7 +40,15 @@ function _els() {
     input: document.getElementById('term-input'),
     runBtn: document.getElementById('term-run-btn'),
     stopBtn: document.getElementById('term-stop-btn'),
+    clearBtn: document.getElementById('term-clear-btn'),
   };
+}
+
+/** Limpia la salida de la terminal (el <pre>). No toca la sesión del shell (cwd/env/historial persisten) —
+ *  es solo cosmético, como `clear` en una terminal real. */
+function _clearOutput() {
+  const { output } = _els();
+  if (output) output.textContent = '';
 }
 
 /** Consulta el modo REAL de la terminal (`GET /api/axon/term/mode`: {mode:"host"|"container"}) y actualiza
@@ -166,7 +174,7 @@ async function _runCommand(cmd) {
 
 function _wire() {
   if (_wired) return;
-  const { modal, input, runBtn, stopBtn } = _els();
+  const { modal, input, runBtn, stopBtn, clearBtn } = _els();
   if (!modal) return;
   _wired = true;
 
@@ -192,6 +200,9 @@ function _wire() {
   }
   if (stopBtn) {
     stopBtn.addEventListener('click', () => { if (_controller) _controller.abort(); });
+  }
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => { _clearOutput(); if (input) input.focus(); });
   }
 }
 
