@@ -41612,8 +41612,19 @@ body.settings-sidebar-resize-active {
 .hsc-chip-val.hs-hot { color: var(--red, #e06c75); }
 .hsc-chip-na { opacity: 0.6; }
 
-/* Compact mode shows a thin strip, so the panel doesn't need the full width. */
-.hoststats-content.hs-mode-compact { width: auto; max-width: 96vw; }
+/* Compact mode: the whole panel collapses to just its title bar, with the stat
+   chips rendered inline in the header. No body — the bar IS the panel. */
+.hoststats-content.hs-mode-compact {
+  width: auto;
+  max-width: 96vw;
+  height: auto !important;   /* beat any saved/dragged height so the bar hugs its content */
+  min-height: 0 !important;
+}
+.hoststats-content.hs-mode-compact #hoststats-body { display: none; }
+.hoststats-content.hs-mode-compact .hoststats-header h4 { display: none; }
+.hoststats-content.hs-mode-compact .hs-compact-row { flex: 1 1 auto; flex-wrap: nowrap; }
+/* The in-header compact strip only exists in compact mode; hide it in full. */
+.hoststats-content:not(.hs-mode-compact) #hoststats-compact-row { display: none; }
 
 /* Host Stats sits above other tool windows like Cookbook does. */
 #hoststats-modal { z-index: 262; }

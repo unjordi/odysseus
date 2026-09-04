@@ -179,7 +179,7 @@ function renderCompact(data) {
   const cpu = (data && data.cpu) || {};
   const ram = (data && data.ram) || {};
 
-  let html = `<div class="hsc-title">[ dionysus stats ]</div>`;
+  let html = '';
 
   if (gpus.length) {
     gpus.forEach((g) => {
@@ -214,7 +214,7 @@ function renderError(msg) {
   const text = `[ NO SIGNAL ] ${esc(msg || 'host monitor unreachable')}`;
   if (_mode === 'compact') {
     const row = $('hoststats-compact-row');
-    if (row) row.innerHTML = `<div class="hsc-title">[ dionysus stats ]</div><div class="hsc-chip hsc-chip-na">${text}</div>`;
+    if (row) row.innerHTML = `<div class="hsc-chip hsc-chip-na">${text}</div>`;
   } else {
     const body = $('hoststats-body');
     if (body) body.innerHTML = `<div class="hs-empty">${text}</div>`;
@@ -244,10 +244,9 @@ function applyMode(mode, opts) {
   const content = modal && modal.querySelector('.modal-content');
   if (content) content.classList.toggle('hs-mode-compact', _mode === 'compact');
 
-  const bodyFull = $('hoststats-body');
-  const bodyCompact = $('hoststats-compact');
-  if (bodyFull) bodyFull.classList.toggle('hidden', _mode === 'compact');
-  if (bodyCompact) bodyCompact.classList.toggle('hidden', _mode !== 'compact');
+  // Body vs compact-strip visibility is driven purely by the `hs-mode-compact`
+  // class on the content (see style.css): compact hides the body entirely and
+  // shows the stat chips inside the title bar — the whole panel becomes the bar.
 
   const sw = $('hoststats-mode-switch');
   if (sw) {
@@ -308,7 +307,7 @@ function open() {
   if (_mode === 'compact') {
     const row = $('hoststats-compact-row');
     if (row && !row.querySelector('.hsc-chip')) {
-      row.innerHTML = '<div class="hsc-title">[ dionysus stats: connecting… ]</div>';
+      row.innerHTML = '<div class="hsc-chip hsc-chip-na">[ connecting… ]</div>';
     }
   } else {
     const body = $('hoststats-body');

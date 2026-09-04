@@ -2563,6 +2563,8 @@
   <div class="modal-content hoststats-content" role="dialog" aria-label="Host Stats">
     <div class="modal-header hoststats-header">
       <h4><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px"><path d="M3 12h4l2 5 4-14 2 9 2-3h4"/></svg>Host Stats</h4>
+      <!-- Compact mode renders its stat chips right here, INSIDE the title bar. -->
+      <div class="hs-compact-row" id="hoststats-compact-row"></div>
       <div class="hoststats-header-actions">
         <div class="hs-mode-switch" id="hoststats-mode-switch" role="group" aria-label="Host Stats view mode">
           <button type="button" class="hs-mode-btn active" data-mode="full">Full</button>
@@ -2574,9 +2576,6 @@
     </div>
     <div class="modal-body hoststats-body" id="hoststats-body">
       <div class="hoststats-loading">[ CONNECTING… ]</div>
-    </div>
-    <div class="hoststats-compact hidden" id="hoststats-compact">
-      <div class="hs-compact-row" id="hoststats-compact-row"></div>
     </div>
   </div>
 </div>
