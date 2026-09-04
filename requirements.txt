@@ -18,6 +18,12 @@ numpy
 # ChromaDB service); fastembed runs local ONNX embeddings.
 chromadb-client
 fastembed
+# Local speech-to-text (mic -> text) via faster-whisper for the "local" STT
+# provider. Core path in this build: the voice mic ships ON by default (see
+# src/settings.py stt_provider="local"), so it must be installed, not optional.
+# CPU out of the box (CTranslate2 backend, no torch); GPU auto-used if a CUDA
+# torch is present. Install `torch` separately for GPU acceleration.
+faster-whisper
 youtube-transcript-api
 # Markdown rendering for research reports (src/visual_report.py).
 # Imported at module-top so it's a hard core dep, not optional.
