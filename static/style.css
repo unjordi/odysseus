@@ -41626,5 +41626,26 @@ body.settings-sidebar-resize-active {
 /* The in-header compact strip only exists in compact mode; hide it in full. */
 .hoststats-content:not(.hs-mode-compact) #hoststats-compact-row { display: none; }
 
+/* Docked compact: pins to the bottom edge like a status bar, and the chat
+   composer reserves room above it so they never overlap/hide each other.
+   `body.hoststats-compact-docked` is set by hostStats.js while compact + open;
+   `--hoststats-dock-h` is the measured bar height. The !important beats the
+   inline position the drag gesture may have left on the content. */
+body.hoststats-compact-docked #hoststats-modal .hoststats-content.hs-mode-compact {
+  position: fixed !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  top: auto !important;
+  transform: none !important;
+  width: auto !important;
+  max-width: none !important;
+  border-radius: 0 !important;
+  border-left: 0; border-right: 0; border-bottom: 0;
+}
+body.hoststats-compact-docked .chat-input-bar {
+  margin-bottom: var(--hoststats-dock-h, 48px);
+}
+
 /* Host Stats sits above other tool windows like Cookbook does. */
 #hoststats-modal { z-index: 262; }

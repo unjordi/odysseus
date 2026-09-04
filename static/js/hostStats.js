@@ -208,6 +208,7 @@ function render(data) {
   _lastData = data;
   if (_mode === 'compact') renderCompact(data);
   else renderFull(data);
+  syncDock();
 }
 
 function renderError(msg) {
@@ -256,6 +257,7 @@ function applyMode(mode, opts) {
   }
 
   if (!o.skipRerender && _lastData) render(_lastData);
+  syncDock();
 }
 
 async function poll() {
@@ -279,6 +281,18 @@ async function poll() {
 function isOpen() {
   const m = $(MODAL_ID);
   return m && !m.classList.contains('hidden');
+}
+
+// Docked-compact: while compact AND open, pin the bar to the bottom edge (CSS)
+// and publish its height so the chat composer can reserve room above it. A no-op
+// (and cleanup) in full mode or when closed.
+function syncDock() {
+  const on = _mode === 'compact' && isOpen();
+  document.body.classList.toggle('hoststats-compact-docked', on);
+  if (on) {
+    const content = $(MODAL_ID) && $(MODAL_ID).querySelector('.modal-content');
+    if (content) document.body.style.setProperty('--hoststats-dock-h', content.offsetHeight + 'px');
+  }
 }
 
 function startPolling() {
@@ -322,6 +336,7 @@ function close() {
   const m = $(MODAL_ID);
   if (m) m.classList.add('hidden');
   stopPolling();
+  syncDock();
 }
 
 function toggle() {
