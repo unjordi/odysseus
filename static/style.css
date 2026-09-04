@@ -41837,7 +41837,8 @@ body.hoststats-compact-docked .chat-input-bar {
    tema del fork, así respeta claro/oscuro sin CSS aparte por tema.
    ============================================================ */
 .cortex-content {
-  width: min(380px, 92vw);
+  width: min(560px, 94vw);
+  max-height: 88vh;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -41846,23 +41847,228 @@ body.hoststats-compact-docked .chat-input-bar {
   pointer-events: auto;
 }
 .cortex-header-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+
+/* Sidebar (rail) + panel — réplica del layout del plasmoid real (riel de pestañas a la
+   izquierda, contenido scrolleable a la derecha). El riel es ESTÁTICO (vive en index.html,
+   fuera de #cortex-body) — solo el panel se re-renderiza en cada poll/cambio de pestaña. */
+.cortex-layout {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0; /* deja que #cortex-body scrollee en vez de estirar el modal */
+}
+.cortex-rail {
+  flex: 0 0 92px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 6px;
+  border-right: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel, var(--bg)) 60%, transparent);
+  overflow-y: auto;
+}
+.cortex-rail-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-family: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.3px;
+  border-radius: 5px;
+  padding: 7px 4px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  opacity: 0.75;
+}
+.cortex-rail-btn:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); opacity: 0.95; }
+.cortex-rail-btn.active {
+  background: color-mix(in srgb, var(--accent-primary, #e8884a) 18%, transparent);
+  color: var(--accent-primary, #e8884a);
+  font-weight: 600;
+  opacity: 1;
+}
+.cortex-rail-btn span { line-height: 1.1; }
+
 .cortex-body {
+  flex: 1 1 auto;
   font-family: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
   color: var(--fg);
   padding: 14px 16px 16px;
   overflow-y: auto;
+  min-width: 0;
 }
-.cortex-reset-row {
+/* Una "sección de límite" (Sesión 5h / Semanal 7d / por-modelo / Gasto real):
+   título+% arriba, barra segmentada (hs-bar/hs-seg compartida con Host Stats)
+   debajo, caption de reset/$equiv al pie. Espeja UsageSection/SpendSection
+   del plasmoid KDE real (cortex/src/plasmoid/contents/ui/main.qml). */
+.cortex-usage { margin-bottom: 14px; }
+.cortex-usage:last-child { margin-bottom: 0; }
+.cortex-usage-head {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
   gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+  margin-bottom: 6px;
+}
+.cortex-usage-caption {
+  margin-top: 6px;
   font-size: 11px;
+  letter-spacing: 0.3px;
+  color: var(--fg);
+  opacity: 0.65;
+}
+.cortex-usage-caption-multiline { white-space: pre-line; }
+
+/* % / $ headline — orange (accent) por default, rojo solo si pctColor lo marca
+   'hot' (>90%, throttle). Misma semántica binaria que pctColor() en el QML. */
+.cortex-pct { color: var(--accent-primary, var(--fg)); font-variant-numeric: tabular-nums; }
+.cortex-pct.hs-hot { color: var(--red, #e06c75); }
+
+.cortex-foot {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  font-size: 10px;
   letter-spacing: 0.5px;
+  color: var(--fg);
+  opacity: 0.6;
+}
+.cortex-foot-warn { opacity: 1; font-weight: 600; color: var(--red, #e06c75); }
+
+/* ── Resumen / Cerebro: grid de tarjetas de stat (StatCard del QML) ── */
+.cortex-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.cortex-stat-card {
   border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 7px 10px;
+  border-radius: 5px;
+  padding: 8px 9px;
+  background: color-mix(in srgb, var(--panel, var(--fg)) 6%, transparent);
+  min-width: 0;
+}
+.cortex-stat-label {
+  font-size: 9px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  opacity: 0.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cortex-stat-value {
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Resumen: heatmap tipo GitHub (actividad diaria) ── */
+.cortex-heatmap {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(7, 10px);
+  gap: 3px;
+  overflow-x: auto;
+  padding-bottom: 10px;
   margin-bottom: 4px;
 }
-.cortex-reset-label { color: var(--fg); opacity: 0.75; text-transform: uppercase; }
-.cortex-reset-val { color: var(--fg); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cortex-heat-cell { width: 10px; height: 10px; border-radius: 2px; }
+
+/* ── Modelos / Proyectos: gráfica apilada por día + lista ── */
+.cortex-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 84px;
+  margin-bottom: 12px;
+}
+.cortex-chart-col {
+  flex: 1 1 auto;
+  min-width: 2px;
+  height: 100%;
+  display: flex;
+  flex-direction: column-reverse;
+}
+.cortex-chart-seg { width: 100%; }
+
+.cortex-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.cortex-list-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+.cortex-swatch { width: 10px; height: 10px; border-radius: 2px; flex: 0 0 auto; align-self: center; }
+.cortex-list-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 9em;
+}
+.cortex-list-meta { flex: 1 1 auto; opacity: 0.7; font-size: 11px; text-align: right; white-space: nowrap; }
+.cortex-list-pct { font-weight: 700; min-width: 3.2em; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ── Proyectos: fila expandible con sesiones (read-only — sin resume/rename,
+   eso es una acción de escritorio que no aplica dentro de Odysseus) ── */
+.cortex-proj-row { cursor: default; }
+.cortex-proj-chevron { opacity: 0.5; font-size: 10px; }
+.cortex-proj-sessions { display: flex; flex-direction: column; gap: 3px; margin: 2px 0 6px 18px; }
+.cortex-proj-session {
+  display: flex; align-items: baseline; gap: 6px; font-size: 11px; opacity: 0.85;
+}
+.cortex-proj-session-dot { color: var(--accent-primary, #e8884a); }
+.cortex-proj-session-label { flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cortex-proj-session-date { opacity: 0.6; font-size: 10px; }
+
+/* ── Chats ── */
+.cortex-divider { height: 1px; background: color-mix(in srgb, var(--border) 60%, transparent); margin: 8px 0; }
+.cortex-list-caption { font-size: 10px; opacity: 0.5; margin-bottom: 6px; }
+.cortex-chat-row { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 2px 0; }
+.cortex-chat-title { flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cortex-chat-badge { border-radius: 8px; padding: 1px 7px; font-size: 10px; font-weight: 700; white-space: nowrap; }
+.cortex-chat-date { opacity: 0.6; font-size: 10px; white-space: nowrap; }
+
+/* ── Cerebro: lista de puntos (hooks cableados / skills instalados) ── */
+.cortex-dot-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.cortex-dot-row { display: flex; align-items: baseline; gap: 7px; font-size: 11px; }
+.cortex-dot { color: #3aa76d; opacity: 0.7; }
+.cortex-dot-name { font-family: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace; }
+.cortex-link { color: var(--accent-primary, var(--fg)); text-decoration: none; }
+.cortex-link:hover { text-decoration: underline; }
+
+/* ── Footer de rango {hoy·7d·30d·∞}, compartido por Resumen/Modelos/Proyectos/Chats
+   (RangeFooter del QML) ── */
+.cortex-range-footer { display: flex; gap: 4px; margin-top: 6px; }
+.cortex-range-pill {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  opacity: 0.7;
+  font-family: inherit;
+  font-size: 10px;
+  letter-spacing: 0.3px;
+  border-radius: 10px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.cortex-range-pill:hover { opacity: 0.95; }
+.cortex-range-pill.active {
+  border-color: var(--accent-primary, #e8884a);
+  color: var(--accent-primary, #e8884a);
+  background: color-mix(in srgb, var(--accent-primary, #e8884a) 16%, transparent);
+  opacity: 1;
+  font-weight: 600;
+}

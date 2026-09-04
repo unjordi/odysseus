@@ -2648,7 +2648,10 @@
 </div>
 <script type="module" src="/static/js/axonConfig.js"></script>
 
-<!-- ── Claude · Cortex panel (estado de la cuota/ventana de 5h de Claude en el HOST) ── -->
+<!-- ── Claude · Cortex panel (estado de la cuota/ventana de 5h de Claude en el HOST) ──
+     Sidebar (rail) + panel, réplica del plasmoid KDE real (main.qml): Límites es la
+     pestaña activa por default; Chats se oculta hasta que haya conversaciones (mismo
+     gate que el widget real — ver cortexWidget.js). -->
 <div id="cortex-modal" class="modal hidden">
   <div class="modal-content cortex-content" role="dialog" aria-label="Claude Cortex">
     <div class="modal-header">
@@ -2658,8 +2661,18 @@
         <button class="close-btn" id="close-cortex-modal" aria-label="Close cortex panel">✖</button>
       </div>
     </div>
-    <div class="modal-body cortex-body" id="cortex-body">
-      <div class="hoststats-loading">[ CONNECTING… ]</div>
+    <div class="cortex-layout">
+      <div class="cortex-rail" id="cortex-rail" role="tablist" aria-label="Secciones de Cortex">
+        <button type="button" class="cortex-rail-btn active" data-tab="limites" role="tab" aria-selected="true">📊<span>Límites</span></button>
+        <button type="button" class="cortex-rail-btn" data-tab="resumen" role="tab" aria-selected="false">📈<span>Resumen</span></button>
+        <button type="button" class="cortex-rail-btn" data-tab="modelos" role="tab" aria-selected="false">🧩<span>Modelos</span></button>
+        <button type="button" class="cortex-rail-btn" data-tab="proyectos" role="tab" aria-selected="false">📁<span>Proyectos</span></button>
+        <button type="button" class="cortex-rail-btn" data-tab="chats" id="cortex-rail-chats" role="tab" aria-selected="false" hidden>💬<span>Chats</span></button>
+        <button type="button" class="cortex-rail-btn" data-tab="cerebro" role="tab" aria-selected="false">🧠<span>Cerebro</span></button>
+      </div>
+      <div class="modal-body cortex-body" id="cortex-body">
+        <div class="hoststats-loading">[ CONNECTING… ]</div>
+      </div>
     </div>
   </div>
 </div>
