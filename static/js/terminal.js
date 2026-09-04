@@ -19,6 +19,19 @@ let _running = false;
 let _controller = null;
 let _badgeFetched = false; // evita re-fetchear /term/mode en cada open() — el modo no cambia en caliente
 
+// `session` id estable por pestaña: el backend mantiene UN shell VIVO por session (cwd/env PERSISTEN entre
+// comandos, como una sesión SSH). En sessionStorage → un reload de la pestaña reconecta al mismo shell
+// (si sigue vivo; si el idle-reaper lo mató, el backend crea uno nuevo transparentemente). Fallback si
+// sessionStorage no está disponible (modo privado, etc.).
+const _session = (() => {
+  const mk = () => 'term-' + ((globalThis.crypto && crypto.randomUUID) ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+  try {
+    let s = sessionStorage.getItem('axon-term-session');
+    if (!s) { s = mk(); sessionStorage.setItem('axon-term-session', s); }
+    return s;
+  } catch { return mk(); }
+})();
+
 function _els() {
   return {
     modal: document.getElementById('term-modal'),
@@ -103,7 +116,7 @@ async function _runCommand(cmd) {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ cmd }),
+      body: JSON.stringify({ cmd, session: _session }),
       signal: _controller.signal,
     });
     if (!res.ok || !res.body) {
