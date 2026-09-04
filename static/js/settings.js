@@ -838,7 +838,7 @@ async function initTtsSettings() {
         ttsMsg.textContent = 'Select a provider first'; ttsMsg.style.color = 'var(--red, #e55)';
         setTimeout(function() { ttsMsg.textContent = ''; }, 2000); return;
       }
-      var testText = 'Hello, this is a test of text to speech.';
+      var testText = 'Hola, esta es una prueba de la voz del asistente. This is a bilingual test of text to speech.';
       previewPlaying = true; previewBtn.textContent = 'Loading...';
       try {
         if (prov === 'browser') {

@@ -1,0 +1,77 @@
+# docker/gpu.tts.yml — Local TTS sidecar (OpenAI-compatible /v1/audio/speech)
+#
+# WHY A SIDECAR (and not the in-process "local"/Kokoro provider):
+#   The Odysseus image is Python 3.14, but Kokoro (kokoro==0.9.4) declares
+#   Requires-Python >=3.10,<3.13 — so the in-container "local" provider CANNOT
+#   install and is effectively dead in Docker. Running the TTS engine as its own
+#   container sidesteps the Python-version clash AND keeps heavy TTS deps out of
+#   the main image. Odysseus talks to it through its EXISTING `endpoint:<id>`
+#   provider (OpenAI-compatible /v1/audio/speech) — zero core-code changes.
+#
+# HOW TO USE (CLI overlay pattern, same as docker/gpu.nvidia.yml):
+#   export COMPOSE_FILE=docker-compose.yml:docker/gpu.nvidia.yml:docker/gpu.tts.yml
+#   docker compose up -d
+# Then create a Model Endpoint in Odysseus → Settings pointing at:
+#   Base URL:  http://tts:8880/v1
+#   Model:     kokoro           (any non-empty string; Kokoro ignores it)
+#   Voice:     ef_dora          (Spanish female) — see README for the full list
+#   API key:   (leave blank)
+# and select it as the TTS provider ("<name> (API)").
+#
+# DEFAULT ENGINE = Kokoro-FastAPI (Apache-2.0, ~1-2 GB VRAM, streaming, 45 ms
+# time-to-first-audio, multilingual incl. Spanish). For MAX Spanish naturalness
+# see the commented Chatterbox service at the bottom.
+
+services:
+  tts:
+    # Pinned tag — bump deliberately. GPU image bundles PyTorch + CUDA.
+    image: ghcr.io/remsky/kokoro-fastapi-gpu:v0.2.4
+    restart: unless-stopped
+    # No host port needed: Odysseus reaches it over the compose network as
+    # http://tts:8880. Uncomment to expose on the host for probing/curl.
+    # ports:
+    #   - "127.0.0.1:8880:8880"
+    environment:
+      # Kokoro-FastAPI reads its model/voices from its own bundled cache.
+      - USE_GPU=true
+    volumes:
+      # Persist the downloaded Kokoro weights (~330 MB) across recreates.
+      - ${APP_DATA_DIR:-./data}/tts_models:/app/api/src/models:z
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; urllib.request.urlopen('http://localhost:8880/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s   # first boot downloads weights
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ALTERNATIVE (premium Spanish naturalness): Chatterbox Multilingual.
+# MIT license, dedicated Latin-American Spanish finetune, voice cloning,
+# ~6-8 GB VRAM, higher latency than Kokoro. Swap the `tts` service above for
+# this one (same Base URL http://tts:8880/v1 → set the port below to 8880),
+# or run it as a second sidecar `tts-es` and point a second endpoint at it.
+#
+#  tts-es:
+#    image: ghcr.io/devnen/chatterbox-tts-server:latest
+#    restart: unless-stopped
+#    environment:
+#      - DEVICE=cuda
+#    volumes:
+#      - ${APP_DATA_DIR:-./data}/chatterbox_models:/app/model_cache:z
+#      - ${APP_DATA_DIR:-./data}/chatterbox_voices:/app/reference_audio:z
+#    deploy:
+#      resources:
+#        reservations:
+#          devices:
+#            - driver: nvidia
+#              count: 1
+#              capabilities: [gpu]
+#    # Endpoint in Odysseus → Base URL: http://tts-es:8004/v1 (check the image's
+#    # documented port), Voice: a predefined Spanish voice or a cloned one.
