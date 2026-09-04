@@ -59,8 +59,12 @@ DEFAULT_SETTINGS = {
     "tts_model": "tts-1",
     "tts_voice": "alloy",
     "tts_speed": "1",
-    "stt_enabled": False,
-    "stt_provider": "disabled",
+    # Ships ON with the local Whisper flow by default: faster-whisper is a core
+    # dependency (requirements.txt) so the mic transcribes on-box, no external
+    # endpoint, no per-instance setup. Runs on CPU (CTranslate2), GPU auto-used
+    # if a CUDA torch is present.
+    "stt_enabled": True,
+    "stt_provider": "local",
     "stt_model": "base",
     "stt_language": "",
     "search_provider": "searxng",
