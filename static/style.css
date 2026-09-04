@@ -41846,17 +41846,43 @@ body.hoststats-compact-docked .chat-input-bar {
   padding: 14px 16px 16px;
   overflow-y: auto;
 }
-.cortex-reset-row {
+/* Una "sección de límite" (Sesión 5h / Semanal 7d / por-modelo / Gasto real):
+   título+% arriba, barra segmentada (hs-bar/hs-seg compartida con Host Stats)
+   debajo, caption de reset/$equiv al pie. Espeja UsageSection/SpendSection
+   del plasmoid KDE real (cortex/src/plasmoid/contents/ui/main.qml). */
+.cortex-usage { margin-bottom: 14px; }
+.cortex-usage:last-child { margin-bottom: 0; }
+.cortex-usage-head {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
   gap: 8px;
-  font-size: 11px;
-  letter-spacing: 0.5px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 7px 10px;
-  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+  margin-bottom: 6px;
 }
-.cortex-reset-label { color: var(--fg); opacity: 0.75; text-transform: uppercase; }
-.cortex-reset-val { color: var(--fg); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cortex-usage-caption {
+  margin-top: 6px;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  color: var(--fg);
+  opacity: 0.65;
+}
+.cortex-usage-caption-multiline { white-space: pre-line; }
+
+/* % / $ headline — orange (accent) por default, rojo solo si pctColor lo marca
+   'hot' (>90%, throttle). Misma semántica binaria que pctColor() en el QML. */
+.cortex-pct { color: var(--accent-primary, var(--fg)); font-variant-numeric: tabular-nums; }
+.cortex-pct.hs-hot { color: var(--red, #e06c75); }
+
+.cortex-foot {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  color: var(--fg);
+  opacity: 0.6;
+}
+.cortex-foot-warn { opacity: 1; font-weight: 600; color: var(--red, #e06c75); }

@@ -1,14 +1,33 @@
 // ============================================
-// CLAUDE · CORTEX panel — status of Claude's 5-hour quota window and brain
-// state on the HOST machine (claude-brain), surfaced inside Odysseus.
+// CLAUDE · CORTEX panel — status of Claude's usage limits (5h session window,
+// weekly window, per-model weekly scoped limits, and real out-of-pocket
+// spend/overage) on the HOST machine (cortex, née claude-brain), surfaced
+// inside Odysseus.
 //
-// The host writes its live snapshot to ~/.cache/claude-brain/state.json, but
-// the Odysseus container cannot read that file directly. So this widget
-// fetches it from a same-origin endpoint (GET /api/cortex/quota) that the
-// axon main car is expected to expose by reading/proxying that file. THE
-// ENDPOINT DOES NOT EXIST YET — this widget is written to degrade with grace
-// (404 / network error / empty payload) until it's wired up, per its own
-// spec (see the header comment on ENDPOINT below and the PR report).
+// The host writes its live snapshot to ~/.cache/cortex/state.json. axon runs
+// as a HOST process (systemd --user axon-maincar) so it can read that file
+// directly, and exposes it same-origin via GET /api/cortex/quota:
+//
+//   200 OK, data available:
+//     { "ok": true, "data": <raw ~/.cache/cortex/state.json content> }
+//
+//   200 OK, degraded (file missing / unreadable / unparseable — cortex never
+//   ran on this host, or hasn't written a snapshot yet):
+//     { "ok": false, "reason": "not_found" | "invalid_json" | "read_error" | "no_home",
+//       "detail": "..." }
+//
+// `data` is passed through VERBATIM from cortex's own harness — the exact
+// same contract the real plasmoid KDE widget consumes (cortex repo,
+// src/plasmoid/contents/ui/main.qml). This widget's render logic (percent
+// colors, reset wording, $ equivalents, per-model rows, real-spend section,
+// footer) is a direct JS port of that QML so the two widgets read alike:
+//
+//   data.account_email, data.account_mismatch, data.basis, data.updated_at
+//   data.five_hour   { percent, cost_usd, resets_at, tokens_used, models[] }
+//   data.weekly      { percent, cost_usd, resets_at, tokens_used, week_start }
+//   data.limits[]    { kind: "session"|"weekly_all"|"weekly_scoped", model, percent, resets_at }
+//   data.spend       { used, cap, currency, percent, enabled }
+//   data.extra_usage { used_credits, monthly_limit, currency, utilization, enabled }
 //
 // Self-contained, same pattern as hostStats.js / axonConfig.js: one endpoint,
 // its own DOM, its own polling loop, its own rail wiring via _railToolMap
@@ -21,32 +40,6 @@
 import { makeWindowDraggable } from './windowDrag.js';
 
 const MODAL_ID = 'cortex-modal';
-
-// ── Endpoint contract (to be wired server-side in the axon main car) ──
-//
-//   GET /api/cortex/quota
-//
-//   200 OK, quota data available:
-//     {
-//       "ok": true,
-//       "host": "cachy",                          // hostname running claude-brain (optional)
-//       "ts": 1756900000,                          // unix seconds, when this snapshot was read
-//       "five_hour": {
-//         "percent": 42.5,                         // 0-100, % of the 5h window consumed
-//         "resets_at": "2026-09-03T18:00:00-06:00", // ISO-8601 (offset or Z); a raw unix-seconds
-//                                                    // number is also accepted as a fallback
-//         "tokens_used": 128000,                    // optional
-//         "token_limit": 300000                     // optional — omit if unknown, widget then
-//                                                    // shows tokens_used alone with no bar
-//       }
-//     }
-//
-//   200 OK, endpoint alive but no active window yet:
-//     { "ok": true, "five_hour": null, "host": "...", "ts": ... }
-//
-//   404 (not wired yet) or any non-2xx / network failure: the widget shows a
-//   graceful "sin datos" / "endpoint pendiente" state — it never throws or
-//   blanks the panel.
 const ENDPOINT = '/api/cortex/quota';
 const REFRESH_MS = 30000; // quota drifts slowly — no need to hammer it like host stats
 const SEGMENTS = 24;
@@ -72,11 +65,12 @@ function segBar(pct, tone) {
   return `<div class="hs-bar${tone ? ' hs-' + tone : ''}${p == null ? ' hs-bar-na' : ''}">${cells}</div>`;
 }
 
+// Mirrors pctColor() in cortex's own plasmoid (main.qml): orange (default
+// accent) always, red ONLY past 90% (throttle warning). No intermediate
+// "warn" tier — deliberately simpler than hostStats' temp/gpu tones.
 function quotaTone(pct) {
   if (pct == null) return null;
-  if (pct >= 90) return 'hot';
-  if (pct >= 70) return 'warn';
-  return 'ok';
+  return pct > 90 ? 'hot' : null;
 }
 
 function fmtPct(n) {
@@ -87,87 +81,174 @@ function fmtInt(n) {
   return (typeof n === 'number' && isFinite(n)) ? Math.round(n).toLocaleString() : '—';
 }
 
-// Accepts an ISO-8601 string OR a raw unix-seconds number (fallback for a
-// simpler server implementation) and returns a Date, or null if unparseable.
-function parseResetsAt(v) {
-  if (v == null) return null;
-  if (typeof v === 'number' && isFinite(v)) return new Date(v * 1000);
-  const d = new Date(v);
-  return isNaN(d.getTime()) ? null : d;
+function fmtMoney(v, cur) {
+  if (typeof v !== 'number' || !isFinite(v)) return '—';
+  const sym = cur === 'USD' ? '$' : (cur ? cur + ' ' : '$');
+  return sym + v.toFixed(2);
 }
 
-function fmtResetsAt(v) {
-  const d = parseResetsAt(v);
-  if (!d) return { abs: '—', rel: '' };
-  const abs = d.toLocaleString([], { hour: '2-digit', minute: '2-digit', month: 'short', day: 'numeric' });
-  const deltaMs = d.getTime() - Date.now();
-  if (deltaMs <= 0) return { abs, rel: 'ya debería resetear' };
-  const mins = Math.round(deltaMs / 60000);
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  const rel = h > 0 ? `en ${h}h ${m}m` : `en ${m}m`;
-  return { abs, rel };
+// true si el instante ISO ya pasó (o es ahora mismo). Espeja isPast() del QML.
+function isPastIso(iso) {
+  if (!iso) return false;
+  const t = Date.parse(iso);
+  if (isNaN(t)) return false;
+  return t <= Date.now();
+}
+
+// Reset específico/útil — espeja resetDetail() del QML: <24h → "en 4h36m";
+// ≥24h → "mié@7:59" (día abreviado en español + hora 12h, sin am/pm).
+function resetDetail(iso) {
+  if (!iso) return '';
+  const t = Date.parse(iso);
+  if (isNaN(t)) return '';
+  const secs = (t - Date.now()) / 1000;
+  if (secs < 86400) {
+    const total = Math.max(0, Math.round(secs));
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    if (h > 0) return m > 0 ? `en ${h}h${m}m` : `en ${h}h`;
+    if (total >= 60) return `en ${m}m`;
+    return 'en <1m';
+  }
+  const d = new Date(t);
+  const wd = ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'][d.getDay()];
+  let hh = d.getHours() % 12;
+  if (hh === 0) hh = 12;
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${wd}@${hh}:${mm}`;
+}
+
+// Espeja relativeTime() del QML: "hace Xunit" / "en Xunit", unidad la más
+// legible (s/min/h/d) según la magnitud.
+function relativeTime(iso) {
+  if (!iso) return '';
+  const t = Date.parse(iso);
+  if (isNaN(t)) return String(iso);
+  const diff = Math.round((t - Date.now()) / 1000);
+  const abs = Math.abs(diff);
+  let val, unit;
+  if (abs < 60) { val = abs; unit = 's'; }
+  else if (abs < 3600) { val = Math.round(abs / 60); unit = 'min'; }
+  else if (abs < 86400) { val = Math.round(abs / 3600); unit = 'h'; }
+  else { val = Math.round(abs / 86400); unit = 'd'; }
+  return diff < 0 ? `hace ${val}${unit}` : `en ${val}${unit}`;
+}
+
+// Una sección "Sesión (5h)" / "Semanal (7d)" / por-modelo: título + %, barra,
+// caption de reset + $equiv. Espeja el component UsageSection del QML —
+// misma composición (título+pct arriba, barra, caption abajo), un solo bloque
+// reusado para las tres variantes (5h, 7d, por-modelo).
+function usageSectionHtml(title, block) {
+  const pct = block && typeof block.percent === 'number' ? block.percent : null;
+  const tone = quotaTone(pct);
+  const pctClass = 'cortex-pct' + (tone ? ' hs-' + tone : '');
+  const pctLabel = pct != null ? fmtPct(pct) + '%' : '—';
+
+  let caption = '';
+  if (block) {
+    const past = isPastIso(block.resets_at);
+    caption = past
+      ? `Se restableció ${relativeTime(block.resets_at)} · actualizando…`
+      : `Se restablece ${resetDetail(block.resets_at)}`;
+    if (typeof block.cost_usd === 'number') {
+      caption += ` · ≈ $${block.cost_usd.toFixed(2)} (API equiv local)`;
+    }
+  }
+
+  return `<div class="cortex-usage">`
+    + `<div class="cortex-usage-head"><span>${esc(title)}</span><span class="${pctClass}">${pctLabel}</span></div>`
+    + segBar(pct, tone)
+    + `<div class="cortex-usage-caption">${esc(caption)}</div>`
+    + `</div>`;
+}
+
+// Sección de GASTO REAL (dinero de bolsillo) + sobreuso — distinta del
+// "≈ $ (API equiv local)" de arriba, que es el equivalente incluido del
+// plan. Espeja SpendSection del QML.
+function spendSectionHtml(spend, extra) {
+  if (!spend || spend.enabled !== true) return '';
+  const pct = typeof spend.percent === 'number' ? spend.percent : null;
+  const tone = quotaTone(pct);
+  const pctClass = 'cortex-pct' + (tone ? ' hs-' + tone : '');
+  const headline = fmtMoney(spend.used, spend.currency);
+
+  let caption = `${fmtMoney(spend.used, spend.currency)} / ${fmtMoney(spend.cap, spend.currency)}`;
+  if (spend.currency) caption += ` ${spend.currency}`;
+  caption += ' — gasto real de bolsillo (no el equivalente incluido del plan)';
+  if (extra && extra.enabled === true && extra.used_credits != null) {
+    caption += `\nSobreuso: ${fmtInt(extra.used_credits)} / ${fmtInt(extra.monthly_limit)} créditos`;
+    if (typeof extra.utilization === 'number') caption += ` (${extra.utilization.toFixed(1)}%)`;
+  }
+
+  return `<div class="cortex-usage">`
+    + `<div class="cortex-usage-head"><span>Gasto real</span><span class="${pctClass}">${esc(headline)}</span></div>`
+    + segBar(pct, tone)
+    + `<div class="cortex-usage-caption cortex-usage-caption-multiline">${esc(caption)}</div>`
+    + `</div>`;
+}
+
+// Límites semanales acotados a UN modelo (weekly_scoped con .model). Efímeros
+// y cambiantes → se renderizan dinámicamente, sin hardcodear modelos. Espeja
+// scopedLimits del QML.
+function scopedLimits(limits) {
+  if (!Array.isArray(limits)) return [];
+  return limits.filter((l) => l && l.kind === 'weekly_scoped' && l.model);
+}
+
+// Línea de pie: cuenta + cadencia de refresco + hace-cuánto del snapshot.
+// Espeja el PC3.Label del footer en el QML (incluye el aviso de account_mismatch).
+function footerText(data) {
+  if (!data) return 'cargando…';
+  const account = data.account_email || (data.basis === 'oauth' ? 'datos reales' : 'estimado local');
+  const updated = data.updated_at ? relativeTime(data.updated_at) : '—';
+  if (data.account_mismatch === true) {
+    return `⚠ ${account} no es la cuenta fijada · ⟳ 5 min + al reset 5h · act. ${updated}`;
+  }
+  return `${account} · ⟳ 5 min + al reset 5h · act. ${updated}`;
 }
 
 function render(data) {
   const body = $('cortex-body');
   if (!body) return;
 
-  const fh = data && data.five_hour;
-  let html = '';
+  let html = '<div class="hs-section-label">[ LÍMITES DE USO ]</div>';
+  html += usageSectionHtml('Sesión (5 h)', data.five_hour);
+  html += usageSectionHtml('Semanal (7 d)', data.weekly);
 
-  html += `<div class="hs-section-label">[ VENTANA 5H ]</div>`;
-  if (!fh) {
-    html += `<div class="hs-empty">[ SIN VENTANA ACTIVA ] no hay consumo registrado aún</div>`;
-  } else {
-    const pct = fh.percent;
-    const tone = quotaTone(pct);
-    html += `<div class="hs-metric">`
-      + `<div class="hs-metric-head"><span>USO DE CUOTA</span><span class="hs-metric-num${tone ? ' hs-' + tone : ''}">${fmtPct(pct)}%</span></div>`
-      + segBar(pct, tone)
-      + `</div>`;
-
-    const { abs, rel } = fmtResetsAt(fh.resets_at);
-    html += `<div class="cortex-reset-row">`
-      + `<span class="cortex-reset-label">[ RESETEA ]</span>`
-      + `<span class="cortex-reset-val">${esc(abs)}${rel ? ' · ' + esc(rel) : ''}</span>`
-      + `</div>`;
-
-    if (fh.tokens_used != null) {
-      html += `<div class="hs-section-label">[ TOKENS ]</div>`;
-      if (fh.token_limit != null) {
-        const tPct = fh.token_limit > 0 ? (fh.tokens_used / fh.token_limit) * 100 : null;
-        html += `<div class="hs-metric">`
-          + `<div class="hs-metric-head"><span>USADOS</span><span class="hs-metric-num">${fmtInt(fh.tokens_used)} / ${fmtInt(fh.token_limit)}</span></div>`
-          + segBar(tPct, quotaTone(tPct))
-          + `</div>`;
-      } else {
-        html += `<div class="cortex-reset-row">`
-          + `<span class="cortex-reset-label">[ USADOS ]</span>`
-          + `<span class="cortex-reset-val">${fmtInt(fh.tokens_used)}</span>`
-          + `</div>`;
-      }
-    }
+  const scoped = scopedLimits(data.limits);
+  if (scoped.length) {
+    html += '<div class="hs-section-label">[ POR MODELO (SEMANAL) ]</div>';
+    for (const l of scoped) html += usageSectionHtml(l.model, l);
   }
 
-  const host = (data && data.host) || '';
-  const ts = (data && data.ts) ? new Date(data.ts * 1000).toLocaleTimeString() : '';
-  html += `<div class="hs-foot">[ HOST ] ${esc(host || '—')} <span class="hs-foot-ts">${esc(ts)}</span></div>`;
+  const spendHtml = spendSectionHtml(data.spend, data.extra_usage);
+  if (spendHtml) html += spendHtml;
+
+  const mismatchClass = data.account_mismatch === true ? ' cortex-foot-warn' : '';
+  html += `<div class="cortex-foot${mismatchClass}">${esc(footerText(data))}</div>`;
 
   body.innerHTML = html;
 }
 
-function renderMissingEndpoint() {
+// El endpoint respondió pero {ok:false} (archivo ausente/ilegible en el host)
+// — degradación HONESTA, distinta de un error de red/parseo del propio fetch.
+function renderDegraded(reason, detail) {
   const body = $('cortex-body');
   if (!body) return;
-  body.innerHTML = `<div class="hs-section-label">[ VENTANA 5H ]</div>`
-    + `<div class="hs-empty">[ ENDPOINT PENDIENTE ] ${esc(ENDPOINT)} aún no está cableado en axon</div>`;
+  const why = {
+    not_found: 'cortex nunca corrió en este host (o aún no escribió su primer snapshot)',
+    invalid_json: 'el snapshot de cortex está corrupto',
+    read_error: 'no se pudo leer el snapshot de cortex',
+    no_home: 'axon no tiene $HOME configurado',
+  }[reason] || (detail || 'sin datos');
+  body.innerHTML = '<div class="hs-section-label">[ LÍMITES DE USO ]</div>'
+    + `<div class="hs-empty">[ SIN DATOS ] ${esc(why)}</div>`;
 }
 
 function renderError(msg) {
   const body = $('cortex-body');
   if (!body) return;
-  body.innerHTML = `<div class="hs-section-label">[ VENTANA 5H ]</div>`
+  body.innerHTML = '<div class="hs-section-label">[ LÍMITES DE USO ]</div>'
     + `<div class="hs-empty">[ SIN DATOS ] ${esc(msg || 'cortex monitor unreachable')}</div>`;
 }
 
@@ -178,14 +259,19 @@ async function poll() {
   try {
     const r = await fetch(ENDPOINT, { headers: { Accept: 'application/json' } });
     if (r.status === 404) {
-      renderMissingEndpoint();
+      // axon viejo sin el endpoint cableado todavía (fallback de compatibilidad).
+      renderDegraded('not_found', `${ENDPOINT} aún no está cableado en axon`);
       if (dot) dot.classList.add('stale');
       return;
     }
     if (!r.ok) throw new Error('HTTP ' + r.status);
-    const data = await r.json();
-    if (data && data.ok === false) throw new Error(data.error || 'respuesta no-ok');
-    render(data);
+    const payload = await r.json();
+    if (!payload || payload.ok !== true || !payload.data) {
+      renderDegraded(payload && payload.reason, payload && payload.detail);
+      if (dot) dot.classList.add('stale');
+      return;
+    }
+    render(payload.data);
     if (dot) dot.classList.remove('stale');
   } catch (e) {
     renderError(e && e.message);
