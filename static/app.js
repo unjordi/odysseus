@@ -190,13 +190,29 @@ function initRailHoverLabels() {
     'rail-axoncfg': 'Axon Config',
   };
   document.querySelectorAll('#icon-rail .icon-rail-btn').forEach(btn => {
-    if (btn.querySelector('.rail-hover-label')) return;
-    const label = labels[btn.id] || btn.getAttribute('aria-label') || btn.getAttribute('title') || '';
-    if (!label) return;
-    const span = document.createElement('span');
-    span.className = 'rail-hover-label';
-    span.textContent = String(label).replace(/\s*\([^)]*\)\s*/g, '').trim();
-    btn.appendChild(span);
+    let span = btn.querySelector('.rail-hover-label');
+    if (!span) {
+      const label = labels[btn.id] || btn.getAttribute('aria-label') || btn.getAttribute('title') || '';
+      if (!label) return;
+      span = document.createElement('span');
+      span.className = 'rail-hover-label';
+      span.textContent = String(label).replace(/\s*\([^)]*\)\s*/g, '').trim();
+      btn.appendChild(span);
+    }
+    if (span.dataset.railFixedBound) return;
+    span.dataset.railFixedBound = '1';
+    // .icon-rail can scroll (overflow-y:auto in style.css, once there are
+    // enough buttons to exceed the viewport height) — an absolutely
+    // positioned label would get clipped at that scroll container's edge.
+    // Recompute the trigger's real screen position on every hover and pin
+    // the label with position:fixed so it always escapes the clip, no
+    // matter how the rail is scrolled.
+    btn.addEventListener('mouseenter', () => {
+      const r = btn.getBoundingClientRect();
+      span.style.position = 'fixed';
+      span.style.left = `${r.right}px`;
+      span.style.top = `${r.top + r.height / 2}px`;
+    });
   });
 }
 

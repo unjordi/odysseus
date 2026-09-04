@@ -720,9 +720,18 @@ body.bg-pattern-sparkles {
       margin: 0;
       position: relative;
       box-sizing: border-box;
-      /* Allow hover labels (e.g. the rail-new-chat "New" tooltip) to extend
-         outside the 48px column. overflow:hidden was clipping them. */
-      overflow: visible;
+      /* With enough tool buttons the column can exceed the viewport height
+         (each is added "always visible, alphabetical" — see index.html).
+         Scroll instead of letting buttons get flex-shrunk/squished into
+         overlapping rows. Horizontal overflow stays hidden (48px is fixed
+         width); the hover labels used to rely on `overflow:visible` here to
+         escape the 48px column, but overflow-x can't be `visible` while
+         overflow-y isn't (the UA computes it to `auto` either way, which
+         still clips them) — initRailHoverLabels() in app.js repositions them
+         with `position:fixed` on hover instead, so they escape this
+         scroll container regardless of overflow. */
+      overflow-y: auto;
+      overflow-x: hidden;
     }
     body.sidebar-collapsed:not(.hamburger-only) .icon-rail,
     html.ody-sidebar-mini .icon-rail {
@@ -776,6 +785,10 @@ body.bg-pattern-sparkles {
       position: relative;
       width: 34px;
       height: 34px;
+      /* Never let the flex column squish these into ovals/overlap when the
+         rail's content is taller than its viewport — overflow-y:auto above
+         handles that instead. */
+      flex-shrink: 0;
       border: none;
       background: transparent;
       color: var(--accent, var(--red));
@@ -1175,7 +1188,13 @@ body.bg-pattern-sparkles {
     .rail-new-chat svg { transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1); }
     .rail-new-chat:hover svg { transform: rotate(90deg); }
     /* Sleek hover labels for the mini sidebar. Use a real child span instead
-       of ::before/::after so status dots and minimized indicators keep working. */
+       of ::before/::after so status dots and minimized indicators keep working.
+       Default position is absolute (relative to the button) for the very
+       first paint; initRailHoverLabels() in app.js switches it to
+       `position:fixed` (inline left/top, computed from the button's real
+       screen rect) on the first hover so it always escapes .icon-rail's
+       overflow-y:auto clipping once the rail scrolls. margin-left below still
+       applies to the fixed case (it just offsets the fixed left/top). */
     .rail-hover-label {
       position: absolute;
       left: 100%;
@@ -1201,7 +1220,7 @@ body.bg-pattern-sparkles {
     }
     #rail-admin,
     #rail-settings { color: var(--fg); }
-    .rail-separator { width: 20px; height: 1px; background: var(--border); margin: 4px auto; }
+    .rail-separator { width: 20px; height: 1px; background: var(--border); margin: 4px auto; flex-shrink: 0; }
     .rail-dynamic {
       position: relative;
     }
