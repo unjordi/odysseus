@@ -332,8 +332,12 @@ function toggle() {
 function init() {
   _mode = loadMode();
 
-  const rail = $('rail-hoststats');
-  if (rail) rail.addEventListener('click', toggle);
+  // Odysseus opens every tool through its `tool-*-btn`; the icon-rail launcher
+  // just forwards its click to that button via app.js's `_railToolMap` (where
+  // `rail-hoststats` → `tool-hoststats-btn` is registered). So wire the tool
+  // button — NOT the rail node directly, which the rail dispatch bypasses.
+  const toolBtn = $('tool-hoststats-btn');
+  if (toolBtn) toolBtn.addEventListener('click', toggle);
   const closeBtn = $('close-hoststats-modal');
   if (closeBtn) closeBtn.addEventListener('click', close);
 
