@@ -42074,3 +42074,49 @@ body.hoststats-compact-docked .chat-input-bar {
   opacity: 1;
   font-weight: 600;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────────────────────
+   Añade esto a static/style.css (o a un <style>). Da tamaño concreto al contenedor del emulador para
+   que FitAddon pueda medir cols/rows. El resto del look del terminal lo trae xterm.css (vendored).
+   ───────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* El body del modal es una columna que llena el alto disponible; el emulador toma todo el espacio. */
+.term-modal-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;            /* deja que el hijo con overflow encoja dentro del flex */
+  height: 60vh;            /* alto por defecto del modal de terminal (ajústalo a tu layout) */
+}
+
+/* Contenedor del emulador xterm.js (modo PTY). Debe tener tamaño concreto ANTES de fit(). */
+#term-xterm.term-xterm {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  padding: 6px 8px;
+  box-sizing: border-box;
+  background: #1e1e2e;      /* calza con el theme.background de xterm en terminal.js */
+  overflow: hidden;         /* xterm maneja su propio scroll interno */
+}
+
+/* xterm ocupa todo su contenedor. */
+#term-xterm .xterm,
+#term-xterm .xterm-viewport,
+#term-xterm .xterm-screen {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* Modo one-shot degradado: se comporta como el layout anterior (columna con <pre> + fila de input). */
+#term-oneshot.term-oneshot {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+#term-oneshot .term-output { flex: 1 1 auto; overflow: auto; min-height: 0; }
+
+/* Utilidad: respeta el hidden aunque el contenedor sea flex. */
+#term-xterm.hidden,
+#term-oneshot.hidden { display: none !important; }
+

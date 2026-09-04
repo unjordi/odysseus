@@ -251,6 +251,9 @@
   <link rel="modulepreload" href="/static/js/ui.js">
   <link rel="modulepreload" href="/static/js/sessions.js">
   <link rel="modulepreload" href="/static/js/markdown.js">
+  <link rel="stylesheet" href="/static/lib/xterm.css">
+  <script defer src="/static/lib/xterm.js"></script>
+  <script defer src="/static/lib/addon-fit.js"></script>
 </head>
 <body>
   <!-- Loading overlay — hides all flashing until app is ready -->
@@ -503,14 +506,21 @@
 
   <!-- Terminal (widget que corre comandos en axon — ver docs/terminal.md del repo axon: scope
        CONTENEDOR del maincar, no el host, salvo que se monte/extienda explícitamente) -->
-  <div id="term-modal" class="modal hidden">
-    <div class="modal-content term-modal-content" role="dialog" aria-label="Terminal" style="background:var(--bg)">
-      <div class="modal-header">
-        <h4><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>Terminal <span id="term-scope-badge" class="term-scope-badge" title="Consultando modo…">…</span></h4>
-        <button type="button" id="term-clear-btn" title="Limpiar salida" aria-label="Limpiar salida" style="background:none;border:1px solid var(--border,#3a3a3a);color:var(--text-dim,#9aa);cursor:pointer;font-size:11px;border-radius:6px;padding:2px 8px;margin-right:8px">Clear</button>
-        <button class="close-btn" id="close-term-modal" aria-label="Close terminal">&#x2716;</button>
-      </div>
-      <div class="modal-body term-modal-body">
+  <div id="term-modal">…</div> COMPLETO por este. Conserva badge + Clear + close,
+     agrega el contenedor del emulador (#term-xterm) y envuelve el modo one-shot degradado en #term-oneshot. -->
+<div id="term-modal" class="modal hidden">
+  <div class="modal-content term-modal-content" role="dialog" aria-label="Terminal" style="background:var(--bg)">
+    <div class="modal-header">
+      <h4><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>Terminal <span id="term-scope-badge" class="term-scope-badge" title="Consultando modo…">…</span></h4>
+      <button type="button" id="term-clear-btn" title="Limpiar salida" aria-label="Limpiar salida" style="background:none;border:1px solid var(--border,#3a3a3a);color:var(--text-dim,#9aa);cursor:pointer;font-size:11px;border-radius:6px;padding:2px 8px;margin-right:8px">Clear</button>
+      <button class="close-btn" id="close-term-modal" aria-label="Close terminal">&#x2716;</button>
+    </div>
+    <div class="modal-body term-modal-body">
+      <!-- Modo PTY interactivo (xterm.js monta aquí). Oculto hasta que el WS conecta. -->
+      <div id="term-xterm" class="term-xterm hidden"></div>
+
+      <!-- Modo ONE-SHOT degradado (fallback si el PTY no está disponible). Oculto por default. -->
+      <div id="term-oneshot" class="term-oneshot hidden">
         <pre id="term-output" class="term-output" aria-live="polite"></pre>
         <div class="term-input-row">
           <span class="term-prompt">$</span>
@@ -521,6 +531,7 @@
       </div>
     </div>
   </div>
+</div>
 
   <!-- Theme Popup (floating panel) -->
   <div id="theme-modal" class="modal hidden">
