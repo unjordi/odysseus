@@ -49,19 +49,23 @@ function _els() {
  *  privilegiado) en vez de quedarse en "…" o reventar. Se llama una sola vez, al primer `open()`. */
 async function _refreshBadge() {
   if (_badgeFetched) return;
-  _badgeFetched = true;
   const { badge } = _els();
   if (!badge) return;
   let mode = 'container';
+  let ok = false; // ¿el fetch REALMENTE respondió? (auditoría item 9 #5)
   try {
     const res = await fetch('/api/axon/term/mode', { credentials: 'same-origin' });
     if (res.ok) {
       const data = await res.json();
-      if (data && data.mode === 'host') mode = 'host';
+      if (data && (data.mode === 'host' || data.mode === 'container')) { ok = true; if (data.mode === 'host') mode = 'host'; }
     }
   } catch {
     /* endpoint no disponible (axon viejo sin el fix, o red) → se queda en "container", nunca a ciegas "host" */
   }
+  // Solo marcamos "ya lo tengo" si el fetch respondió de verdad; si falló (axon reiniciando, red), dejamos
+  // _badgeFetched=false para REINTENTAR al próximo open() — así el badge no se queda pegado en "container"
+  // mintiendo cuando en realidad corre en el host (auditoría item 9 #5).
+  if (ok) _badgeFetched = true;
   badge.textContent = mode;
   badge.classList.toggle('host', mode === 'host');
   badge.classList.toggle('container', mode !== 'host');
