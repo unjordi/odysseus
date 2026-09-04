@@ -281,48 +281,109 @@ class TTSService:
         return stats
 
 
+# Kokoro voice-name prefix → G2P language code. The FIRST letter of a Kokoro
+# voice id selects the phonemizer/prosody language; the SECOND is gender.
+# Running Spanish text ("ef_dora") through the English G2P ("a") is exactly what
+# made local TTS sound robotic/mispronounced — the pipeline MUST match the voice.
+# Ref: hexgrad/Kokoro-82M voice list.
+_KOKORO_LANG_BY_PREFIX = {
+    "a": "a",  # American English
+    "b": "b",  # British English
+    "e": "e",  # Spanish (es)   → ef_dora, em_alex, em_santa
+    "f": "f",  # French (fr-fr)
+    "h": "h",  # Hindi
+    "i": "i",  # Italian
+    "j": "j",  # Japanese
+    "p": "p",  # Brazilian Portuguese
+    "z": "z",  # Mandarin Chinese
+}
+
+
+def _lang_code_for_voice(voice: str) -> str:
+    """Pick the Kokoro G2P language from the voice id's first letter."""
+    if voice and voice[0] in _KOKORO_LANG_BY_PREFIX:
+        return _KOKORO_LANG_BY_PREFIX[voice[0]]
+    return "a"  # safe default: American English
+
+
 class _KokoroPipeline:
-    """Encapsulates the Kokoro-82M local GPU pipeline."""
+    """Encapsulates the Kokoro-82M local pipeline (GPU when available, CPU fallback).
+
+    Kokoro binds ONE G2P language per KPipeline instance, so we keep a lazily
+    built pipeline PER language code and route each request by its voice prefix.
+    This is what makes Spanish ("e") actually sound Spanish instead of English
+    phonemes forced onto Spanish words.
+    """
 
     def __init__(self):
-        self.pipeline = None
         self.available = False
         self.device = None
+        self._use_cuda = False
+        self._pipelines: Dict[str, Any] = {}  # lang_code -> KPipeline
         self._init()
 
     def _init(self):
         try:
             import torch
-            from kokoro import KPipeline
+            from kokoro import KPipeline  # noqa: F401  (import-availability probe)
 
-            if not torch.cuda.is_available():
-                logger.warning("CUDA not available for Kokoro TTS")
-                return
-
-            self.device = torch.device("cuda:0")
-            with torch.cuda.device(0):
-                self.pipeline = KPipeline(lang_code="a")
-                if hasattr(self.pipeline, "model"):
-                    self.pipeline.model = self.pipeline.model.to(self.device)
+            self._use_cuda = torch.cuda.is_available()
+            if self._use_cuda:
+                self.device = torch.device("cuda:0")
+                logger.info("Kokoro-82M TTS: CUDA available (GPU)")
+            else:
+                self.device = torch.device("cpu")
+                logger.info("Kokoro-82M TTS: no CUDA, running on CPU")
+            # Warm the default English pipeline so `available` reflects real state.
+            self._get_pipeline("a")
             self.available = True
-            logger.info("Kokoro-82M TTS pipeline loaded")
+            logger.info("Kokoro-82M TTS pipeline ready")
         except ImportError as e:
             logger.warning(f"Kokoro TTS not available: {e}")
-            logger.warning("Install with: pip install kokoro soundfile")
+            logger.warning("Install with: pip install kokoro soundfile (Python 3.11-3.12)")
         except Exception as e:
             logger.error(f"Kokoro init failed: {e}", exc_info=True)
+
+    def _get_pipeline(self, lang_code: str):
+        """Lazily build (and cache) a KPipeline for a G2P language code."""
+        pipe = self._pipelines.get(lang_code)
+        if pipe is not None:
+            return pipe
+        import torch
+        from kokoro import KPipeline
+
+        if self._use_cuda:
+            with torch.cuda.device(0):
+                pipe = KPipeline(lang_code=lang_code)
+                if hasattr(pipe, "model") and pipe.model is not None:
+                    pipe.model = pipe.model.to(self.device)
+        else:
+            pipe = KPipeline(lang_code=lang_code)
+        self._pipelines[lang_code] = pipe
+        logger.info(f"Kokoro pipeline built for lang_code='{lang_code}'")
+        return pipe
 
     def synthesize_raw(self, text: str, voice: str = "af_heart") -> Optional[bytes]:
         if not self.available:
             return None
         try:
-            import torch
             import numpy as np
+            import torch
 
-            with torch.cuda.device(self.device):
+            lang_code = _lang_code_for_voice(voice)
+            pipeline = self._get_pipeline(lang_code)
+
+            def _run():
                 chunks = []
-                for _, _, audio in self.pipeline(text, voice=voice):
+                for _, _, audio in pipeline(text, voice=voice):
                     chunks.append(audio)
+                return chunks
+
+            if self._use_cuda:
+                with torch.cuda.device(self.device):
+                    chunks = _run()
+            else:
+                chunks = _run()
 
             if not chunks:
                 return None
