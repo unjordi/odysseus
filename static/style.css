@@ -41804,3 +41804,40 @@ body.hoststats-compact-docked .chat-input-bar {
 .axoncfg-status-error {
   color: var(--red, #e06c75);
 }
+
+/* ============================================================
+   CLAUDE · CORTEX panel — estado de la ventana de 5h de Claude en el HOST.
+   Mismo lenguaje visual que Host Stats (reactor-console: [ LABELS ], barra
+   segmentada hs-bar/hs-seg compartida, monospace) pintado con los tokens de
+   tema del fork, así respeta claro/oscuro sin CSS aparte por tema.
+   ============================================================ */
+.cortex-content {
+  width: min(380px, 92vw);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+}
+.cortex-header-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.cortex-body {
+  font-family: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+  color: var(--fg);
+  padding: 14px 16px 16px;
+  overflow-y: auto;
+}
+.cortex-reset-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 7px 10px;
+  margin-bottom: 4px;
+}
+.cortex-reset-label { color: var(--fg); opacity: 0.75; text-transform: uppercase; }
+.cortex-reset-val { color: var(--fg); font-variant-numeric: tabular-nums; white-space: nowrap; }

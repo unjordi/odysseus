@@ -3775,6 +3775,7 @@ function startOdysseusApp() {
     'rail-email':     'email-section-title',
     'rail-hoststats': 'tool-hoststats-btn',
     'rail-axoncfg':   'tool-axoncfg-btn',
+    'rail-cortex':    'tool-cortex-btn',
     'rail-term':      'tool-term-btn',
   };
   Object.entries(_railToolMap).forEach(([railId, toolId]) => {
