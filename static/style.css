@@ -4532,6 +4532,8 @@ body.bg-pattern-sparkles {
       opacity:0.6; border:1px solid var(--border); border-radius:4px;
       padding:1px 5px; margin-left:6px; vertical-align:1px; cursor:help;
     }
+    /* host = corre en tu compu (broker), no en el contenedor — acento distinto para que salte a la vista */
+    .term-scope-badge.host { opacity:0.9; color:var(--green); border-color:var(--green); }
     .term-modal-body { flex:1; display:flex; flex-direction:column; min-height:0; gap:8px; }
     .term-output {
       flex:1; margin:0; padding:8px 10px;

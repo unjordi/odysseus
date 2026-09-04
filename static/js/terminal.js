@@ -5,8 +5,9 @@
 // vía fetch+ReadableStream (no EventSource: EventSource solo hace GET, este endpoint es POST).
 //
 // ⚠️ SCOPE: el comando corre DENTRO del contenedor Docker del maincar de axon (su cwd — normalmente
-// /workspace + lo que el compose monte), NO en "tu compu" (el host) a menos que el compose lo extienda
-// explícitamente. Ver el caveat completo + cómo extender a host en docs/terminal.md del repo axon.
+// /workspace + lo que el compose monte) SALVO que axon tenga configurado el broker host-side
+// (term-host-broker.ts), en cuyo caso corre en TU HOST como tú. El badge del header (`#term-scope-badge`)
+// refleja el modo REAL vía `GET /api/axon/term/mode` — nunca hardcodeado — ver docs/terminal.md del repo axon.
 //
 // Simple a propósito (pedido explícito: "NO necesitas xterm.js completo"): un <input> + un <pre> con
 // scroll. Sin historial de comandos ni interpretación de secuencias ANSI — texto crudo tal cual llega.
@@ -16,15 +17,44 @@ import { makeWindowDraggable } from './windowDrag.js';
 let _wired = false;
 let _running = false;
 let _controller = null;
+let _badgeFetched = false; // evita re-fetchear /term/mode en cada open() — el modo no cambia en caliente
 
 function _els() {
   return {
     modal: document.getElementById('term-modal'),
+    badge: document.getElementById('term-scope-badge'),
     output: document.getElementById('term-output'),
     input: document.getElementById('term-input'),
     runBtn: document.getElementById('term-run-btn'),
     stopBtn: document.getElementById('term-stop-btn'),
   };
+}
+
+/** Consulta el modo REAL de la terminal (`GET /api/axon/term/mode`: {mode:"host"|"container"}) y actualiza
+ *  el badge del header — texto, title y una clase `.host`/`.container` para estilo. Fail-safe: si el fetch
+ *  falla (axon no responde el endpoint todavía, red…) deja el badge en "container" (el modo de default/menos
+ *  privilegiado) en vez de quedarse en "…" o reventar. Se llama una sola vez, al primer `open()`. */
+async function _refreshBadge() {
+  if (_badgeFetched) return;
+  _badgeFetched = true;
+  const { badge } = _els();
+  if (!badge) return;
+  let mode = 'container';
+  try {
+    const res = await fetch('/api/axon/term/mode', { credentials: 'same-origin' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.mode === 'host') mode = 'host';
+    }
+  } catch {
+    /* endpoint no disponible (axon viejo sin el fix, o red) → se queda en "container", nunca a ciegas "host" */
+  }
+  badge.textContent = mode;
+  badge.classList.toggle('host', mode === 'host');
+  badge.classList.toggle('container', mode !== 'host');
+  badge.title = mode === 'host'
+    ? 'Corre en tu HOST (vía el broker de axon), como tú — ver docs/terminal.md'
+    : 'Corre dentro del contenedor de axon (cwd del maincar), no en tu host — ver docs/terminal.md';
 }
 
 /** Appendea texto crudo (textContent, NUNCA innerHTML — la salida del comando no es HTML de confianza)
@@ -155,6 +185,7 @@ function open() {
   const { modal, input } = _els();
   if (!modal) return;
   modal.classList.remove('hidden');
+  void _refreshBadge();
   if (input) setTimeout(() => input.focus(), 0);
 }
 
