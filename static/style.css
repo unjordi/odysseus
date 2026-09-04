@@ -41771,10 +41771,15 @@ body.settings-sidebar-resize-active {
    composer reserves room above it so they never overlap/hide each other.
    `body.hoststats-compact-docked` is set by hostStats.js while compact + open;
    `--hoststats-dock-h` is the measured bar height. The !important beats the
-   inline position the drag gesture may have left on the content. */
+   inline position the drag gesture may have left on the content.
+   `left` reserves the icon rail / wide sidebar strip (whichever is
+   currently visible) via the same `--icon-rail-w` / `--sidebar-w` live vars
+   the fullscreen tool panels use (see the #calendar-modal etc. block above)
+   — so the bar never covers the sidebar/rail across its collapsed, resized,
+   mini or off states. */
 body.hoststats-compact-docked #hoststats-modal .hoststats-content.hs-mode-compact {
   position: fixed !important;
-  left: 0 !important;
+  left: calc(var(--icon-rail-w, 48px) + var(--sidebar-w, 0px)) !important;
   right: 0 !important;
   bottom: 0 !important;
   top: auto !important;
@@ -41783,6 +41788,7 @@ body.hoststats-compact-docked #hoststats-modal .hoststats-content.hs-mode-compac
   max-width: none !important;
   border-radius: 0 !important;
   border-left: 0; border-right: 0; border-bottom: 0;
+  transition: left 0.25s ease;
 }
 body.hoststats-compact-docked .chat-input-bar {
   margin-bottom: var(--hoststats-dock-h, 48px);
