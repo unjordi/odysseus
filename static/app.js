@@ -39,6 +39,7 @@ import './js/modalManager.js?v=20260723compareicon2';
 // Desktop window tiling — drag a modal near an edge/corner to snap.
 import './js/tileManager.js';
 import themeModule from './js/theme.js';
+import terminalModule from './js/terminal.js';
 // IMPORTANT: import cookbook.js with NO ?v= query — the same plain specifier
 // every other importer (cookbook-hwfit.js / cookbook-diagnosis.js) uses. A query
 // mismatch makes the browser load cookbook.js twice as separate modules (two
@@ -60,6 +61,11 @@ window.sessionModule = sessionModule;
 window.uiModule = uiModule;
 window.adminModule = adminModule;
 window.cookbookModule = cookbookModule;
+// Exposed so settings.js (STT provider changes) and the composer's dedicated
+// mic button can reach the same voiceRecorder singleton without an import
+// cycle. Was previously never assigned — settings.js's
+// `if (window.voiceRecorderModule) ...` guard was silently a no-op.
+window.voiceRecorderModule = voiceRecorderModule;
 
 function _isMobileChatInput() {
   return window.innerWidth <= 768;
@@ -181,6 +187,7 @@ function initRailHoverLabels() {
     'rail-tasks': 'Tasks',
     'rail-theme': 'Theme',
     'rail-settings': 'Settings',
+    'rail-axoncfg': 'Axon Config',
   };
   document.querySelectorAll('#icon-rail .icon-rail-btn').forEach(btn => {
     if (btn.querySelector('.rail-hover-label')) return;
@@ -729,6 +736,7 @@ function initializeEventListeners() {
         'rename-ai-modal': null,
         'custom-preset-modal': null,
         'memory-modal': null,
+        'term-modal': null,
       };
 
       // Dynamic modals (removed from DOM on close)
@@ -779,6 +787,7 @@ function initializeEventListeners() {
   const _modalSidebarMap = {
     'memory-modal': null,
     'theme-modal': null,
+    'term-modal': null,
   };
   const _dynamicModalIds = ['library-modal', 'archive-modal', 'doclib-modal', 'gallery-modal', 'tasks-modal'];
   function dismissModal(modal) {
@@ -1678,6 +1687,22 @@ function initializeEventListeners() {
       memoryModal.classList.remove('hidden');
       if (memoryModule && memoryModule.renderMemoryList) memoryModule.renderMemoryList();
       if (memoryModule && memoryModule.updateMemoryCount) memoryModule.updateMemoryCount();
+    });
+  }
+
+  // Sidebar Terminal button — widget que corre comandos en axon (POST /api/axon/term, streamed).
+  // Scope: contenedor del maincar, no el host — ver docs/terminal.md del repo axon.
+  const toolTermBtn = el('tool-term-btn');
+  const termModal = el('term-modal');
+  if (toolTermBtn && termModal) {
+    toolTermBtn.addEventListener('click', () => {
+      terminalModule.open();
+    });
+  }
+  const closeTermBtn = el('close-term-modal');
+  if (closeTermBtn && termModal) {
+    closeTermBtn.addEventListener('click', () => {
+      dismissModal(termModal);
     });
   }
 
@@ -3748,6 +3773,9 @@ function startOdysseusApp() {
     'rail-memory':    'tool-memory-btn',
     'rail-theme':     'tool-theme-btn',
     'rail-email':     'email-section-title',
+    'rail-hoststats': 'tool-hoststats-btn',
+    'rail-axoncfg':   'tool-axoncfg-btn',
+    'rail-term':      'tool-term-btn',
   };
   Object.entries(_railToolMap).forEach(([railId, toolId]) => {
     const railBtn = el(railId);
@@ -4348,6 +4376,90 @@ function startOdysseusApp() {
 	  // Ensure proper initial state
 	  voiceRecorderModule.init();
 	  if (censorModule) censorModule.init();
+
+	  // ── Dedicated composer mic button: whisper-flow style dictation ──
+	  // Distinct from the send-button's mic overlay (which only appears when
+	  // the composer is empty and does one batch recording). This one lives
+	  // in .chat-input-left, works even with existing text in the box, and
+	  // streams text in as the user talks instead of waiting for Stop.
+	  (function initVoiceFlowButton() {
+	    const btn = document.getElementById('voice-input-btn');
+	    if (!btn) return;
+	    const statusEl = document.getElementById('voice-flow-status');
+	    const labelEl = statusEl ? statusEl.querySelector('.voice-flow-label') : null;
+	    const interimEl = statusEl ? statusEl.querySelector('.voice-flow-interim') : null;
+	    const stopBtn = document.getElementById('voice-flow-stop-btn');
+
+	    function setActiveUI(active) {
+	      btn.classList.toggle('recording', active);
+	      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+	      btn.title = active ? 'Stop dictation' : 'Dictate by voice';
+	      if (statusEl) statusEl.hidden = !active;
+	      if (!active && interimEl) interimEl.textContent = '';
+	    }
+
+	    function onState(state, interim) {
+	      if (labelEl) {
+	        labelEl.textContent = state === 'transcribing' ? 'Transcribing…' : 'Listening…';
+	      }
+	      if (interimEl) interimEl.textContent = interim || '';
+	      if (state === 'idle') setActiveUI(false);
+	    }
+
+	    function insertFlowText(text) {
+	      if (!messageInput || !text) return;
+	      const existing = messageInput.value;
+	      const needsSpace = existing && !/\s$/.test(existing);
+	      messageInput.value = existing + (needsSpace ? ' ' : '') + text + ' ';
+	      messageInput.dispatchEvent(new Event('input', { bubbles: true }));
+	      messageInput.focus();
+	      messageInput.selectionStart = messageInput.selectionEnd = messageInput.value.length;
+	    }
+
+	    function stop() {
+	      voiceRecorderModule.stopWhisperFlow();
+	      setActiveUI(false);
+	    }
+
+	    btn.addEventListener('click', (e) => {
+	      e.preventDefault();
+	      if (voiceRecorderModule.isWhisperFlowActive()) {
+	        stop();
+	        return;
+	      }
+	      setActiveUI(true);
+	      onState('listening', '');
+	      voiceRecorderModule.startWhisperFlow({
+	        onInsert: insertFlowText,
+	        onState,
+	        showToast: uiModule.showToast,
+	        showError: (msg) => {
+	          uiModule.showError(msg);
+	          setActiveUI(false);
+	        },
+	      });
+	    });
+
+	    if (stopBtn) {
+	      stopBtn.addEventListener('click', (e) => {
+	        e.preventDefault();
+	        e.stopPropagation();
+	        stop();
+	      });
+	    }
+
+	    // Hide the button entirely when STT is off — same gating the
+	    // send-button's mic overlay already applies, so we never show a
+	    // control that can't work. Kept in sync (no reload needed) via
+	    // voiceRecorder.js calling window._syncVoiceFlowAvailability on any
+	    // provider change (settings save, or the initial /api/stt/stats fetch).
+	    function syncAvailability() {
+	      const provider = voiceRecorderModule._sttProvider;
+	      btn.style.display = (provider && provider !== 'disabled') ? '' : 'none';
+	    }
+	    window._syncVoiceFlowAvailability = syncAvailability;
+	    syncAvailability();
+	  })();
 
 	  // ── Mobile pull-to-refresh for the active chat ──
 	  (function initMobileChatPullRefresh() {

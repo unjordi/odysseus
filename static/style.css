@@ -2524,6 +2524,66 @@ body.bg-pattern-sparkles {
 	    .plan-mode-status-toggle:hover {
 	      background: color-mix(in srgb, var(--accent, var(--red)) 30%, transparent);
 	    }
+	    /* Whisper-flow dictation indicator — mirrors .plan-mode-status but
+	       anchored to the opposite corner so the two never collide. */
+	    .voice-flow-status {
+	      position: absolute;
+	      left: 0;
+	      bottom: 2px;
+	      z-index: 245;
+	      display: inline-flex;
+	      align-items: center;
+	      gap: 6px;
+	      max-width: calc(100% - 8px);
+	      height: 22px;
+	      padding: 0 6px 0 8px;
+	      border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
+	      border-radius: 999px;
+	      background: color-mix(in srgb, var(--red) 12%, var(--input-bg, var(--panel)));
+	      color: var(--red);
+	      font-size: 10px;
+	      font-weight: 700;
+	      line-height: 1;
+	    }
+	    .voice-flow-status[hidden] { display: none !important; }
+	    .voice-flow-dot {
+	      width: 7px;
+	      height: 7px;
+	      border-radius: 50%;
+	      background: var(--red);
+	      flex-shrink: 0;
+	      animation: voice-flow-pulse 1.3s ease-in-out infinite;
+	    }
+	    .voice-flow-label { flex-shrink: 0; white-space: nowrap; }
+	    .voice-flow-interim {
+	      font-weight: 500;
+	      opacity: 0.7;
+	      font-style: italic;
+	      overflow: hidden;
+	      text-overflow: ellipsis;
+	      white-space: nowrap;
+	      min-width: 0;
+	    }
+	    .voice-flow-stop {
+	      display: flex;
+	      align-items: center;
+	      justify-content: center;
+	      width: 14px;
+	      height: 14px;
+	      padding: 0;
+	      border: none;
+	      border-radius: 50%;
+	      color: var(--red);
+	      background: color-mix(in srgb, var(--red) 20%, transparent);
+	      cursor: pointer;
+	      flex-shrink: 0;
+	      margin-left: 2px;
+	    }
+	    .voice-flow-stop:hover { background: color-mix(in srgb, var(--red) 32%, transparent); }
+	    @keyframes voice-flow-pulse {
+	      0%, 100% { opacity: 1; transform: scale(1); }
+	      50% { opacity: 0.4; transform: scale(0.75); }
+	    }
 	    .chat-input-top > .model-picker-wrap {
 	      position: absolute;
 	      top: 0;
@@ -2777,6 +2837,12 @@ body.bg-pattern-sparkles {
     @keyframes research-pulse {
       0%, 100% { background: color-mix(in srgb, var(--red) 12%, transparent); }
       50% { background: color-mix(in srgb, var(--red) 22%, transparent); }
+    }
+    /* Dedicated composer mic button (#voice-input-btn) while dictating */
+    #voice-input-btn.recording {
+      opacity: 1 !important;
+      color: var(--red);
+      animation: research-pulse 2s ease-in-out infinite;
     }
     .tool-indicator-x {
       margin-left: 2px;
@@ -4434,6 +4500,46 @@ body.bg-pattern-sparkles {
        panel AND the document panel (doc-run-output reuses the same children). */
     .code-runner-output,
     .doc-run-output { padding-right: 110px; }
+
+    /* Terminal widget (rail-term / tool-term-btn → #term-modal). Wider/taller than the default
+       .modal-content — a shell wants room — mirroring #cookbook-modal's own size override. */
+    #term-modal .modal-content {
+      width:min(760px, 92vw);
+      height:min(560px, 82vh);
+      max-height:82vh;
+    }
+    .term-scope-badge {
+      font-size:0.65em; font-weight:600; letter-spacing:0.02em; text-transform:uppercase;
+      opacity:0.6; border:1px solid var(--border); border-radius:4px;
+      padding:1px 5px; margin-left:6px; vertical-align:1px; cursor:help;
+    }
+    .term-modal-body { flex:1; display:flex; flex-direction:column; min-height:0; gap:8px; }
+    .term-output {
+      flex:1; margin:0; padding:8px 10px;
+      overflow-y:auto; overflow-x:auto;
+      background:var(--bg); border:1px solid var(--border); border-radius:6px;
+      font-family:'Fira Code', 'Courier New', monospace;
+      font-size:0.85em; line-height:1.5;
+      white-space:pre-wrap; word-break:break-word;
+      color:var(--fg);
+    }
+    .term-output .term-stderr { color:var(--red); }
+    .term-output .term-cmd { color:var(--hl-function, #61afef); font-weight:600; }
+    .term-output .term-exit { opacity:0.6; font-style:italic; }
+    .term-input-row { display:flex; align-items:center; gap:6px; flex-shrink:0; }
+    .term-prompt { font-family:'Fira Code', 'Courier New', monospace; opacity:0.6; flex-shrink:0; }
+    .term-input {
+      flex:1; min-width:0;
+      font-family:'Fira Code', 'Courier New', monospace; font-size:0.9em;
+      background:var(--input-bg, var(--panel)); color:var(--fg);
+      border:1px solid var(--border); border-radius:6px; padding:6px 8px;
+    }
+    .term-run-btn, .term-stop-btn {
+      flex-shrink:0; font-size:12px; padding:6px 12px; border-radius:6px;
+      border:1px solid var(--border); background:var(--panel); color:var(--fg); cursor:pointer;
+    }
+    .term-run-btn:hover, .term-stop-btn:hover { border-color:var(--accent-primary, var(--red)); color:var(--accent-primary, var(--red)); }
+    .term-stop-btn { border-color:var(--red); color:var(--red); }
 
     .toast {
       position:fixed;
@@ -41398,4 +41504,303 @@ body.settings-sidebar-resize-active {
   .settings-sidebar-toggle {
     display: none;
   }
+}
+
+/* ============================================================
+   HOST STATS panel — reactor-console host hardware monitor.
+   Dionysus-reactor look (bracketed [ LABELS ], segmented bars,
+   monospace) painted with Odysseus theme tokens so it stays
+   native and honors the active light/dark theme.
+   ============================================================ */
+.hoststats-content {
+  width: min(560px, 94vw);
+  max-height: 88vh;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+}
+
+/* ============================================================
+   AXON CONFIG panel — configura el cerebro (modelo local) y el modo de axon.
+   Look de panel nativo (no reactor-console): mismos tokens de tema que el
+   resto del fork (--fg/--bg/--panel/--border/--accent-*), así respeta
+   claro/oscuro sin CSS aparte por tema.
+   ============================================================ */
+.axoncfg-content {
+  width: min(420px, 92vw);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+}
+.hoststats-header { align-items: center; }
+.hoststats-header h4 { color: var(--fg); }
+.hoststats-header-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+
+/* Full ⇄ Compact view toggle */
+.hs-mode-switch {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+  font-family: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+.hs-mode-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  opacity: 0.6;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.hs-mode-btn + .hs-mode-btn { border-left: 1px solid var(--border); }
+.hs-mode-btn:hover { opacity: 0.9; }
+.hs-mode-btn.active {
+  opacity: 1;
+  color: var(--accent-primary, var(--fg));
+  background: color-mix(in srgb, var(--accent-primary, var(--fg)) 14%, transparent);
+}
+.hoststats-live-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent-primary, var(--fg));
+  box-shadow: 0 0 6px var(--accent-primary, var(--fg));
+  animation: hs-pulse 1.5s ease-in-out infinite;
+}
+.hoststats-live-dot.stale { background: var(--red, #e06c75); box-shadow: none; animation: none; }
+@keyframes hs-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.hoststats-body {
+  font-family: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+  color: var(--fg);
+  padding: 14px 16px 16px;
+  overflow-y: auto;
+}
+.hoststats-loading, .hs-empty {
+  color: var(--fg);
+  opacity: 0.75;
+  letter-spacing: 1px;
+  padding: 10px 2px;
+  font-size: 12px;
+}
+.hs-empty { border: 1px dashed var(--border); border-radius: 4px; margin-bottom: 10px; padding: 8px 10px; }
+
+.hs-section-label {
+  color: var(--accent-primary, var(--fg));
+  letter-spacing: 2px;
+  font-size: 11px;
+  text-transform: uppercase;
+  margin: 14px 0 8px;
+  opacity: 0.85;
+}
+.hs-section-label:first-child { margin-top: 0; }
+
+/* GPU cards */
+.hs-gpu-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+@media (min-width: 460px) { .hs-gpu-grid { grid-template-columns: 1fr 1fr; } }
+.hs-gpu {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 10px 11px 11px;
+  background: linear-gradient(to top, color-mix(in srgb, var(--panel) 45%, transparent), transparent);
+  min-width: 0; /* let grid items shrink so the 2-col layout never overflows */
+}
+.hs-gpu-title {
+  color: var(--fg);
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  margin-bottom: 9px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hs-metric { margin-bottom: 9px; }
+.hs-metric:last-child { margin-bottom: 0; }
+.hs-metric-head {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+  color: var(--fg); opacity: 0.8; margin-bottom: 4px;
+  min-width: 0;
+}
+.hs-metric-head > span:first-child { flex-shrink: 0; }
+.hs-metric-num { opacity: 1; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Segmented bar */
+.hs-bar { display: flex; gap: 2px; height: 14px; }
+.hs-seg {
+  flex: 1;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+.hs-seg.on {
+  background: var(--accent-primary, var(--fg));
+  border-color: var(--accent-primary, var(--fg));
+  box-shadow: 0 0 4px color-mix(in srgb, var(--accent-primary, var(--fg)) 55%, transparent);
+}
+.hs-warn .hs-seg.on { background: var(--accent-warm, #d19a66); border-color: var(--accent-warm, #d19a66); box-shadow: 0 0 4px color-mix(in srgb, var(--accent-warm, #d19a66) 55%, transparent); }
+.hs-hot .hs-seg.on  { background: var(--red, #e06c75); border-color: var(--red, #e06c75); box-shadow: 0 0 5px color-mix(in srgb, var(--red, #e06c75) 60%, transparent); }
+.hs-bar-na .hs-seg { opacity: 0.4; }
+
+/* Temp read-out (big) */
+.hs-metric-temp .hs-metric-head { margin-bottom: 2px; }
+.hs-temp-read { font-size: 20px; font-weight: 600; letter-spacing: 1px; font-variant-numeric: tabular-nums; }
+.hs-ok { color: var(--fg); }
+.hs-warn.hs-temp-read, .hs-temp-read.hs-warn { color: var(--accent-warm, #d19a66); }
+.hs-hot.hs-temp-read, .hs-temp-read.hs-hot { color: var(--red, #e06c75); }
+
+/* Model loaded */
+.hs-models { display: flex; flex-direction: column; gap: 6px; }
+.hs-model {
+  border: 1px solid var(--border); border-radius: 4px; padding: 7px 10px;
+  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+}
+.hs-model-name { color: var(--fg); font-size: 12px; }
+.hs-model-meta { color: var(--fg); opacity: 0.65; font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* System (CPU + RAM) */
+.hs-sys { display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--border); border-radius: 5px; padding: 11px; }
+
+/* Footer */
+.hs-foot {
+  margin-top: 14px; padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  font-size: 10px; letter-spacing: 1px; color: var(--fg); opacity: 0.6;
+  display: flex; justify-content: space-between;
+}
+.hs-foot-ts { opacity: 0.8; }
+
+/* ── Compact mode ──
+   Same card language as full (border, segmented bar, hs-ok/warn/hot tone
+   classes) shrunk into a single-row strip of mini-chips — a condensed form
+   factor, not a different look. "dionysus stats" label kept as homage. */
+.hoststats-compact {
+  font-family: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+  padding: 12px 16px 14px;
+}
+.hs-compact-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.hsc-title {
+  color: var(--accent-primary, var(--fg));
+  letter-spacing: 1.5px;
+  font-size: 10px;
+  text-transform: uppercase;
+  opacity: 0.85;
+  white-space: nowrap;
+  margin-right: 2px;
+}
+.hsc-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 8px;
+  background: linear-gradient(to top, color-mix(in srgb, var(--panel) 45%, transparent), transparent);
+}
+.hsc-chip-label {
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--fg);
+  opacity: 0.75;
+  white-space: nowrap;
+}
+.hsc-chip-bar .hs-bar {
+  height: 10px;
+  gap: 1px;
+  width: 60px;
+}
+.hsc-chip-val {
+  font-size: 11px;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.hsc-chip-val.hs-warn { color: var(--accent-warm, #d19a66); }
+.hsc-chip-val.hs-hot { color: var(--red, #e06c75); }
+.hsc-chip-na { opacity: 0.6; }
+
+/* Compact mode: the whole panel collapses to just its title bar, with the stat
+   chips rendered inline in the header. No body — the bar IS the panel. */
+.hoststats-content.hs-mode-compact {
+  width: auto;
+  max-width: 96vw;
+  height: auto !important;   /* beat any saved/dragged height so the bar hugs its content */
+  min-height: 0 !important;
+}
+.hoststats-content.hs-mode-compact #hoststats-body { display: none; }
+.hoststats-content.hs-mode-compact .hoststats-header h4 { display: none; }
+.hoststats-content.hs-mode-compact .hs-compact-row { flex: 1 1 auto; flex-wrap: nowrap; }
+/* The in-header compact strip only exists in compact mode; hide it in full. */
+.hoststats-content:not(.hs-mode-compact) #hoststats-compact-row { display: none; }
+
+/* Docked compact: pins to the bottom edge like a status bar, and the chat
+   composer reserves room above it so they never overlap/hide each other.
+   `body.hoststats-compact-docked` is set by hostStats.js while compact + open;
+   `--hoststats-dock-h` is the measured bar height. The !important beats the
+   inline position the drag gesture may have left on the content. */
+body.hoststats-compact-docked #hoststats-modal .hoststats-content.hs-mode-compact {
+  position: fixed !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  top: auto !important;
+  transform: none !important;
+  width: auto !important;
+  max-width: none !important;
+  border-radius: 0 !important;
+  border-left: 0; border-right: 0; border-bottom: 0;
+}
+body.hoststats-compact-docked .chat-input-bar {
+  margin-bottom: var(--hoststats-dock-h, 48px);
+}
+
+/* Host Stats sits above other tool windows like Cookbook does. */
+#hoststats-modal { z-index: 262; }
+.axoncfg-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.axoncfg-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.axoncfg-row label {
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  color: var(--fg);
+  opacity: 0.75;
+}
+.axoncfg-row select {
+  width: 100%;
+}
+.axoncfg-ollama {
+  font-size: 11px;
+  color: var(--fg);
+  opacity: 0.6;
+}
+.axoncfg-status {
+  font-size: 12px;
+  min-height: 1.4em;
+  color: var(--accent-primary, var(--fg));
+}
+.axoncfg-status-error {
+  color: var(--red, #e06c75);
 }
