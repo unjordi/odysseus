@@ -34,8 +34,8 @@ class STTService:
         return {
             "stt_enabled": saved.get("stt_enabled", False),
             "stt_provider": saved.get("stt_provider", "disabled"),
-            "stt_model": saved.get("stt_model", "base"),
-            "stt_language": saved.get("stt_language", ""),
+            "stt_model": saved.get("stt_model", "large-v3"),
+            "stt_language": saved.get("stt_language", "es"),
         }
 
     @property
@@ -88,7 +88,7 @@ class STTService:
                 # same process (Kokoro's in-process pipeline, DB, etc). Pin it
                 # explicitly so a transcribe() call stays fast without
                 # hogging every core. Override with ODYSSEUS_STT_CPU_THREADS.
-                cpu_threads = int(os.getenv("ODYSSEUS_STT_CPU_THREADS", "4"))
+                cpu_threads = int(os.getenv("ODYSSEUS_STT_CPU_THREADS", "16"))
                 self._whisper_model = WhisperModel(
                     model_size,
                     device=device,
@@ -137,9 +137,27 @@ class STTService:
                 tmp.write(audio_bytes)
                 tmp_path = tmp.name
 
-            kwargs = {}
-            if language:
-                kwargs["language"] = language
+            # Config para español (receta validada, chat unjordi↔Opus5 2026-09-06):
+            # los 3 que más mueven la aguja contra el "to the boss" son
+            # language fijo, VAD con speech_pad generoso, y condition_on_previous_text=False.
+            kwargs = {
+                # language SIEMPRE fijo — NUNCA autodetección: en clips cortos (<2-3s)
+                # Whisper detecta inglés y produce basura ("to the boss"). Default es-MX.
+                "language": language or "es",
+                "task": "transcribe",              # nunca "translate"
+                "vad_filter": True,
+                "vad_parameters": dict(
+                    min_silence_duration_ms=300,
+                    speech_pad_ms=400,             # no comerse el inicio de frase
+                ),
+                "condition_on_previous_text": False,  # evita arrastrar alucinaciones/bucles
+                "temperature": 0.0,
+                "initial_prompt": (
+                    "Transcripción de dictado técnico en español de México. "
+                    "Términos frecuentes: Whisper, cuantización, MCP, endpoint, "
+                    "VRAM, faster-whisper, ctranslate2, push-to-talk, latencia, axon, Odysseus."
+                ),
+            }
 
             segments, info = model.transcribe(tmp_path, **kwargs)
             text = " ".join(seg.text.strip() for seg in segments)
