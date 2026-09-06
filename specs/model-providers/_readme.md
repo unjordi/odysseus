@@ -81,6 +81,8 @@ Current reader dispatch does not infer a provider from payload shape. It uses an
 
 - [local-compatible-engines.md](local-compatible-engines.md): MLX LM, TGI,
   LMDeploy, LiteLLM, and unknown compatible deployments.
+- [freetoken.md](freetoken.md): local MoE OpenAI-compatible server, port 7090,
+  auto-registered as a model endpoint on boot.
 
 ## Provider Spec Template
 
