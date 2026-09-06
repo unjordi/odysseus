@@ -42149,15 +42149,11 @@ body.hoststats-compact-docked .chat-input-bar {
   overflow: hidden;         /* xterm maneja su propio scroll interno; nada asoma fuera del contenedor */
 }
 
-/* xterm ocupa el ANCHO del contenedor. El ALTO lo calcula xterm (rows*cellHeight, múltiplo EXACTO de
-   la fila) → la última fila NUNCA queda a medias. Forzar height:100% dejaba una fila parcial cuando el
-   alto del contenedor no era múltiplo del alto de fila (Fix 2). El sobrante bajo la rejilla muestra el
-   fondo #1e1e2e, limpio. */
-#term-xterm .xterm,
-#term-xterm .xterm-viewport,
-#term-xterm .xterm-screen {
-  width: 100% !important;
-}
+/* xterm posee AMBAS dimensiones: renderiza a cols*cellWidth × rows*cellHeight (múltiplos EXACTOS de celda),
+   así ni la última fila ni la última columna quedan a medias. Forzar width/height:100% estiraba la rejilla
+   más allá del múltiplo exacto → filas/columnas parciales (Fix 2 vertical + este Fix horizontal: se
+   desbordaban un par de chars a la derecha). FitAddon mide el contenedor y fija cols/rows; xterm rendea
+   exacto y el sobrante (hasta ~1 celda + la scrollbar) muestra el fondo #1e1e2e, limpio. */
 
 /* Scrollbar SOLO cuando de verdad hay overflow (Fix 3). xterm.css fuerza overflow-y:scroll (barra
    siempre visible) → lo bajamos a auto: sin scrollback que quepa, no hay barra. */
