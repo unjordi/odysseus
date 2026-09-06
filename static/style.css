@@ -3328,7 +3328,11 @@ body.bg-pattern-sparkles {
       color: var(--fg);
     }
     .model-picker-btn #model-picker-label {
-      max-width: 120px;
+      /* Ancho RESPONSIVO: crece con el viewport (los nombres largos tipo
+         "gpt-oss-120b" ya no se cortan en pantallas con espacio) pero mantiene
+         piso 120px y techo 340px + ellipsis para no reventar el chat-bar en
+         ventanas angostas. */
+      max-width: clamp(120px, 22vw, 340px);
       overflow: hidden;
       text-overflow: ellipsis;
     }
