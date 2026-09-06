@@ -54,10 +54,16 @@ DEFAULT_SETTINGS = {
     # Public base URL used to build clickable deep-links in outgoing alerts
     # (e.g., urgency alert email). Example: "https://chat.example.com"
     "app_public_url": "",
+    # Ships ON with the local Kokoro sidecar by default (docker/gpu.tts.yml):
+    # natural, multilingual (incl. Spanish) read-aloud with no external API and
+    # no ModelEndpoint to hand-create. The in-process "local" Kokoro is dead in
+    # the py3.14 Docker image, so the sidecar ("kokoro") is the functional path;
+    # default voice ef_dora = Spanish female (change it in Settings → Text to
+    # Speech). If the sidecar isn't deployed, synthesis just returns an error.
     "tts_enabled": True,
-    "tts_provider": "disabled",
-    "tts_model": "tts-1",
-    "tts_voice": "alloy",
+    "tts_provider": "kokoro",
+    "tts_model": "kokoro",
+    "tts_voice": "ef_dora",
     "tts_speed": "1",
     # Ships ON with the local Whisper flow by default: faster-whisper is a core
     # dependency (requirements.txt) so the mic transcribes on-box, no external

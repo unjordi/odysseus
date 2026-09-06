@@ -743,17 +743,50 @@ async function initTtsSettings() {
   var ttsEnabledToggle = el('set-ttsEnabledToggle');
   var ttsConfigWrap = provSel ? provSel.closest('div[style*="flex-direction"]') : null;
 
+  // Kokoro voices (sidecar + in-process "local"). Spanish first — the whole
+  // point of this build. First letter = G2P language (e=Spanish, a=US English,
+  // b=British); second = gender. Voice choice is unjordi's taste; ef_dora is a
+  // sensible Spanish-female default, everything is selectable.
+  var KOKORO_VOICE_GROUPS = [
+    ['Español', [['ef_dora', 'Dora (♀ es)'], ['em_alex', 'Alex (♂ es)'], ['em_santa', 'Santa (♂ es)']]],
+    ['English (US)', [['af_heart', 'Heart (♀)'], ['af_bella', 'Bella (♀)'], ['af_nicole', 'Nicole (♀)'], ['af_sarah', 'Sarah (♀)'], ['am_michael', 'Michael (♂)'], ['am_adam', 'Adam (♂)']]],
+    ['English (UK)', [['bf_emma', 'Emma (♀)'], ['bf_isabella', 'Isabella (♀)'], ['bm_george', 'George (♂)'], ['bm_lewis', 'Lewis (♂)']]],
+  ];
+  var OPENAI_VOICES = [['alloy', 'Alloy'], ['ash', 'Ash'], ['coral', 'Coral'], ['echo', 'Echo'], ['fable', 'Fable'], ['nova', 'Nova'], ['onyx', 'Onyx'], ['sage', 'Sage'], ['shimmer', 'Shimmer']];
+
+  function populateVoiceSelect(useKokoro, keep) {
+    var prev = keep || voiceSelect.value;
+    voiceSelect.innerHTML = '';
+    if (useKokoro) {
+      KOKORO_VOICE_GROUPS.forEach(function(g) {
+        var og = document.createElement('optgroup'); og.label = g[0];
+        g[1].forEach(function(v) { var o = document.createElement('option'); o.value = v[0]; o.textContent = v[1]; og.appendChild(o); });
+        voiceSelect.appendChild(og);
+      });
+    } else {
+      OPENAI_VOICES.forEach(function(v) { var o = document.createElement('option'); o.value = v[0]; o.textContent = v[1]; voiceSelect.appendChild(o); });
+    }
+    // Restore prior selection if still present in the new list.
+    if (prev && voiceSelect.querySelector('option[value="' + prev.replace(/"/g, '') + '"]')) voiceSelect.value = prev;
+  }
+
   function isEndpoint() { return provSel.value.startsWith('endpoint:'); }
-  function getModel() { return isEndpoint() ? modelSelect.value : modelInput.value; }
-  function getVoice() { return isEndpoint() ? voiceSelect.value : voiceInput.value; }
+  function isKokoro() { return provSel.value === 'kokoro' || provSel.value === 'local'; }
+  // Providers that pick their voice from the dropdown (vs. the free-text input).
+  function usesVoiceDropdown() { return isEndpoint() || isKokoro(); }
+  function getModel() { return provSel.value === 'kokoro' ? 'kokoro' : (isEndpoint() ? modelSelect.value : modelInput.value); }
+  function getVoice() { return usesVoiceDropdown() ? voiceSelect.value : voiceInput.value; }
 
   function updateVisibility() {
     var prov = provSel.value;
+    // Model is only user-selectable for arbitrary API endpoints; kokoro/local
+    // pin their own model, browser/disabled have none.
     modelRow.style.display = prov.startsWith('endpoint:') ? 'flex' : 'none';
     voiceRow.style.display = prov === 'disabled' ? 'none' : 'flex';
     speedRow.style.display = prov === 'disabled' ? 'none' : 'flex';
-    if (isEndpoint()) {
-      modelSelect.style.display = ''; modelInput.style.display = 'none';
+    if (usesVoiceDropdown()) {
+      populateVoiceSelect(isKokoro());
+      modelSelect.style.display = isEndpoint() ? '' : 'none'; modelInput.style.display = 'none';
       voiceSelect.style.display = ''; voiceInput.style.display = 'none';
     } else {
       modelSelect.style.display = 'none'; modelInput.style.display = '';
@@ -761,7 +794,7 @@ async function initTtsSettings() {
     }
   }
 
-  var ttsKeywords = ['tts', 'audio'];
+  var ttsKeywords = ['tts', 'audio', 'speech', 'voice', 'kokoro'];
   try {
     var epRes = await fetch('/api/model-endpoints', { credentials: 'same-origin' });
     var endpoints = await epRes.json();
@@ -778,6 +811,9 @@ async function initTtsSettings() {
     var settings = await settingsRes.json();
     if (settings.tts_provider) provSel.value = settings.tts_provider;
     if (settings.tts_model) { modelSelect.value = settings.tts_model; modelInput.value = settings.tts_model; }
+    // Populate the voice dropdown for the loaded provider BEFORE applying the
+    // saved voice, so a Kokoro voice (e.g. ef_dora) actually matches an option.
+    if (usesVoiceDropdown()) populateVoiceSelect(isKokoro());
     if (settings.tts_voice) { voiceSelect.value = settings.tts_voice; voiceInput.value = settings.tts_voice; }
     if (settings.tts_speed) { speedSelect.value = settings.tts_speed; }
     if (ttsEnabledToggle) ttsEnabledToggle.checked = settings.tts_enabled !== false;
@@ -807,8 +843,8 @@ async function initTtsSettings() {
 
   provSel.addEventListener('change', function() {
     var prov = provSel.value;
-    if (prov === 'local') voiceInput.value = 'af_heart';
-    else if (isEndpoint()) { voiceSelect.value = 'alloy'; modelSelect.value = 'tts-1'; }
+    if (prov === 'kokoro' || prov === 'local') { populateVoiceSelect(true); voiceSelect.value = 'ef_dora'; }
+    else if (isEndpoint()) { populateVoiceSelect(false); voiceSelect.value = 'alloy'; modelSelect.value = 'tts-1'; }
     else if (prov === 'browser') { voiceInput.value = ''; voiceInput.placeholder = 'OS default voice'; }
     updateVisibility();
     saveTTS();

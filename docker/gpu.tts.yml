@@ -5,18 +5,21 @@
 #   Requires-Python >=3.10,<3.13 — so the in-container "local" provider CANNOT
 #   install and is effectively dead in Docker. Running the TTS engine as its own
 #   container sidesteps the Python-version clash AND keeps heavy TTS deps out of
-#   the main image. Odysseus talks to it through its EXISTING `endpoint:<id>`
-#   provider (OpenAI-compatible /v1/audio/speech) — zero core-code changes.
+#   the main image. Odysseus talks to it through the built-in "kokoro" TTS
+#   provider (OpenAI-compatible /v1/audio/speech at http://tts:8880/v1).
 #
 # HOW TO USE (CLI overlay pattern, same as docker/gpu.nvidia.yml):
 #   export COMPOSE_FILE=docker-compose.yml:docker/gpu.nvidia.yml:docker/gpu.tts.yml
 #   docker compose up -d
-# Then create a Model Endpoint in Odysseus → Settings pointing at:
-#   Base URL:  http://tts:8880/v1
-#   Model:     kokoro           (any non-empty string; Kokoro ignores it)
-#   Voice:     ef_dora          (Spanish female) — see README for the full list
-#   API key:   (leave blank)
-# and select it as the TTS provider ("<name> (API)").
+# That's it — TTS works out of the box. Odysseus ships with the built-in
+# "kokoro" provider selected by default (Settings → Text to Speech), pointing
+# at THIS sidecar over the compose network — NO ModelEndpoint to hand-create.
+# Default voice ef_dora (Spanish female); pick any from the dropdown. Override
+# the URL with ODYSSEUS_TTS_SIDECAR_URL (default http://tts:8880/v1).
+#
+# (The "endpoint:<id>" provider still exists for a REMOTE/custom OpenAI-
+#  compatible engine: create a Model Endpoint → Base URL http://tts:8880/v1,
+#  Model "kokoro", Voice ef_dora, API key blank, then select "<name> (API)".)
 #
 # DEFAULT ENGINE = Kokoro-FastAPI (Apache-2.0, ~1-2 GB VRAM, streaming, 45 ms
 # time-to-first-audio, multilingual incl. Spanish). For MAX Spanish naturalness
@@ -27,10 +30,11 @@ services:
     # Pinned tag — bump deliberately. GPU image bundles PyTorch + CUDA.
     image: ghcr.io/remsky/kokoro-fastapi-gpu:v0.2.4
     restart: unless-stopped
-    # No host port needed: Odysseus reaches it over the compose network as
-    # http://tts:8880. Uncomment to expose on the host for probing/curl.
-    # ports:
-    #   - "127.0.0.1:8880:8880"
+    # Odysseus reaches it over the compose network as http://tts:8880. Also
+    # exposed on the host loopback so you can probe/curl it directly (harmless;
+    # bound to 127.0.0.1 only). Comment out to keep it network-internal.
+    ports:
+      - "127.0.0.1:8880:8880"
     environment:
       # Kokoro-FastAPI reads its model/voices from its own bundled cache.
       - USE_GPU=true

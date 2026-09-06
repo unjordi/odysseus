@@ -15,10 +15,12 @@
      `>=3.10,<3.13` → el proveedor `local` **ni siquiera se instala** en el
      contenedor. En Docker la voz caía a `browser` (Web Speech API del SO) = la
      voz robótica que se oía.
-- **Solución recomendada (encaja con la arquitectura existente, cero reescritura
-  del core):** correr el motor TTS como **sidecar con API OpenAI-compatible**
-  (`/v1/audio/speech`) y apuntarle desde el proveedor `endpoint:<id>` que
-  Odysseus **ya** tiene. Overlay listo: `docker/gpu.tts.yml`.
+- **Solución:** correr el motor TTS como **sidecar con API OpenAI-compatible**
+  (`/v1/audio/speech`, overlay `docker/gpu.tts.yml`) y consumirlo desde un
+  proveedor **built-in `kokoro`** (default) que apunta al sidecar sobre la red de
+  compose (`http://tts:8880/v1`) **sin ModelEndpoint que crear a mano**. También
+  se **destapó el panel de TTS** (estaba oculto → por eso "no se veía") y se
+  metieron las **voces en español al dropdown**.
 - **Motor por defecto:** **Kokoro-FastAPI** (Apache-2.0, ~1-2 GB VRAM, streaming,
   45 ms al primer audio, multilingüe con español). **Upgrade para máxima
   naturalidad en español:** **Chatterbox Multilingual** (MIT, finetune dedicado
@@ -89,14 +91,26 @@ fluidez, streaming, licencia usable en self-host, VRAM.
    útil para pruebas fuera de Docker.
 2. **`docker/gpu.tts.yml` — sidecar OpenAI-compatible** (Kokoro-FastAPI por
    defecto; Chatterbox comentado como alternativa). Overlay al estilo de
-   `docker/gpu.nvidia.yml`.
-3. **`static/js/settings.js` — texto del Preview** ahora es bilingüe
-   español+inglés, para que el botón "Preview" pruebe entonación **en español**.
-4. **`scripts/tts-samples/`** — generador de muestras (`generate_samples.py`) +
+   `docker/gpu.nvidia.yml`. Ahora expone `127.0.0.1:8880` para probar con curl.
+3. **`services/tts/tts_service.py` + `src/settings.py` — proveedor built-in
+   `kokoro`** (la pieza que faltaba para que "se vea"). Habla con el sidecar por
+   `http://tts:8880/v1` (override `ODYSSEUS_TTS_SIDECAR_URL`) reusando el mismo
+   POST OpenAI-compatible que `endpoint:<id>`. Es el **default** (`tts_provider=
+   kokoro`, `tts_voice=ef_dora`) → TTS funciona apenas se levanta el sidecar, sin
+   crear un ModelEndpoint a mano.
+4. **`static/index.html` — panel de TTS destapado.** Estaba `hidden
+   display:none` ("user opted out") → **esa era la razón real de "no lo veo en
+   ningún lado"**. Añadida la opción de proveedor "Kokoro (local sidecar)".
+5. **`static/js/settings.js` — voces de Kokoro en el dropdown** (español
+   primero: `ef_dora`/`em_alex`/`em_santa`, + inglés US/UK) para los proveedores
+   `kokoro`/`local`; filtro de endpoints ampliado (`speech`/`voice`/`kokoro`);
+   texto del Preview bilingüe ES+EN.
+6. **`scripts/tts-samples/`** — generador de muestras (`generate_samples.py`) +
    los `.wav` ya generados para QA.
 
 > **Nada declarado LISTO.** Compila/importa y el cableado es correcto, pero la
-> calidad de la voz es **QA auditivo tuyo** — por eso las muestras.
+> calidad y la ELECCIÓN de la voz son **QA auditivo tuyo** — por eso las muestras
+> y por eso todas las voces quedan seleccionables (default `ef_dora`, cámbialo).
 
 ---
 
@@ -110,13 +124,11 @@ export COMPOSE_FILE=docker-compose.yml:docker/gpu.nvidia.yml:docker/gpu.tts.yml
 docker compose up -d
 # (primer arranque del sidecar descarga los pesos Kokoro ~330 MB → data/tts_models/)
 
-# 2. En Odysseus → Settings → Model Endpoints, crear un endpoint:
-#      Base URL: http://tts:8880/v1
-#      Model:    kokoro
-#      Voice:    ef_dora           # español femenino (o em_alex masculino)
-#      API key:  (vacío)
-# 3. Settings → Text to Speech → proveedor = "<nombre> (API)"; velocidad 1.0.
-# 4. Botón Preview: debe leer la frase en español con buena entonación.
+# 2. Nada más que hacer: el proveedor built-in "kokoro" ya es el default y apunta
+#    al sidecar. Settings → Text to Speech muestra el panel con las voces ES en el
+#    dropdown (default ef_dora). Botón Preview: lee la frase en español.
+#    (Si un settings.json viejo tenía tts_provider="disabled", basta elegir
+#     "Kokoro (local sidecar)" una vez en el panel ahora visible.)
 ```
 
 Voces Kokoro en español: **`ef_dora`** (F), **`em_alex`** (M), **`em_santa`** (M).
@@ -181,9 +193,10 @@ probar Chatterbox.
   `KPipeline`; el fix mantiene un pipeline por idioma y enruta por el prefijo de
   la voz. Si en el futuro se mezcla ES+EN en una misma frase, cada frase debería
   fonemizarse en su idioma (hoy se toma el de la voz seleccionada).
-- **La UI del card de TTS puede estar oculta** (ver `specs/speech.md`: "TTS
-  settings card is currently hidden"). Verificar que esté visible antes del QA, o
-  configurar vía `data/settings.json` / `manage_settings`.
+- **El card de TTS estaba oculto** (`hidden display:none` en `index.html`, ver
+  `specs/speech.md`) — **era la causa del "no lo veo en ningún lado"**. Ya se
+  destapó en este branch. Si vuelve a ocultarse en un merge de upstream, revisar
+  ese `<div class="admin-card">` del panel "Text to Speech".
 - **Cache global sin partición por dueño** — el audio cacheado (`data/tts_cache/`)
   no distingue usuario. Fuera del alcance de este branch (ya documentado como gap
   en `specs/speech.md`), pero relevante si el despliegue es multi-usuario.
