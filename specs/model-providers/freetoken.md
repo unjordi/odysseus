@@ -46,40 +46,35 @@ identifying the engine, and adds reasoning-effort control fields
 plain vLLM. The generic reader retains only identity (`id`); the reasoning and
 `max_model_len` fields are raw/unread — a dedicated reader is not implemented.
 
-## Running the FreeToken backend (host setup — reproducible)
+## Running the FreeToken backend (host setup)
 
 FreeToken is a HOST service Odysseus never launches itself; the endpoint above
-only *points at* it. To have it available, run FreeToken on the host serving the
-MoE model (we use **gpt-oss-120b**, offloaded to RAM). Reproducible steps
-(paths shown for the reference host — a Linux box with an NVIDIA RTX 50xx +
-ample RAM; adapt `$HOME`/venv path to yours):
+only *points at* it, and treats it as an always-on external engine (the boot
+seed is a silent no-op when it is down).
 
-1. **Install** the CLI (once): `uv pip install "freetoken[accel]"` into a venv
-   (reference host: `~/.local/freetoken-venv`). Model `openai/gpt-oss-120b` is
-   pulled to the HF cache on first serve. Run `ft bench bw` once per machine
-   before serving large models (Q★ needs the measured bandwidth).
-2. **Serve it as a persistent service** (NOT a bare `nohup` — that dies on
-   reboot). systemd `--user` unit (`~/.config/systemd/user/freetoken.service`):
-
-   ```ini
-   [Unit]
-   Description=FreeToken — MoE (gpt-oss-120b) OpenAI-compat server on :7090
-   After=network-online.target
-   [Service]
-   Type=simple
-   ExecStart=%h/.local/freetoken-venv/bin/ft serve \
-     --model openai/gpt-oss-120b --served-model-name gpt-oss-120b \
-     --host 0.0.0.0 --port 7090 --moe-backend auto \
-     --tool-call-parser gpt_oss --reasoning-parser gpt_oss
-   Restart=on-failure
-   RestartSec=10
-   TimeoutStartSec=0
-   [Install]
-   WantedBy=default.target
-   ```
-   `systemctl --user enable --now freetoken.service`. **`--host 0.0.0.0` is
-   required** — loopback-only is unreachable from the Odysseus container.
-3. **Open the firewall** for Docker→host on :7090 (see the gap note below).
+> ### 🛑 REGLA DURA: gpt-oss-120b es ON-DEMAND, **NUNCA pineado/always-on en RAM**
+> Decisión de unjordi (ver axon `.claude/memory/` bitácora 2026-08-27 «no pinear
+> 66GB por sorpresa» + estado-proyecto 2026-08-28 «no pinear en RAM/SSD modelos
+> enormes sin usar»). El 120b se invoca **explícitamente cuando hace falta**; su
+> pool de expertos vive en un **hueco dedicado del SSD NVMe** para cargar rápido,
+> **no** copiado/pineado en RAM ni mezclado con el blob que `ollama-ram-pin`
+> mlockea. **PROHIBIDO** correr `ft serve` como servicio always-on con
+> `--moe-cache-auto`/`--moe-backend offload` sin tope: eso mete ~60GB en RAM
+> compartida (`Shmem`) + ~14GB de VRAM de forma permanente y satura la máquina.
+> (Incidente 2026-09-06: un `freetoken.service` always-on subió la RAM usada a
+> 97/123GB y casi la crashea; se detuvo y deshabilitó.)
+>
+> **Cómo SÍ:** arrancar `ft serve` **on-demand** (cuando un chat/agente va a usar
+> el 120b) y bajarlo al terminar, con el modelo en el NVMe rápido y **sin** cache
+> de expertos pineada (dejar que las páginas del modelo sean page-cache
+> reclamable, no `Shmem` committed). El comando exacto/mecanismo on-demand
+> (socket-activation, wrapper de arranque-bajo-demanda, o flags de cache
+> acotada) **queda por confirmar con unjordi** — hasta entonces NO dejarlo
+> corriendo. `--host 0.0.0.0` es necesario para que el contenedor lo alcance;
+> ver la regla de firewall en los gaps de abajo.
+>
+> Instalación (una vez): `uv pip install "freetoken[accel]"` en un venv; `ft
+> bench bw` una vez por máquina antes de servir modelos grandes.
 
 ## Fallback And Current Gaps
 
