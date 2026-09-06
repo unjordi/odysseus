@@ -1080,6 +1080,27 @@ async def _startup_event():
 
     _startup_tasks.append(asyncio.create_task(_startup_mcp_connections()))
 
+    # STT (local Whisper) preload — default ON, unlike the generic warmups
+    # below. Those are speculative ("might help a later request"); this one
+    # is loading a model the user's OWN settings already turned on
+    # (stt_enabled=True, stt_provider="local" out of the box) — skipping it
+    # just means the FIRST real transcribe() request eats the ~seconds-long
+    # model load instead of the app doing it quietly in the background while
+    # the rest of startup runs. No-op (fast) if STT is disabled or set to a
+    # non-local provider. Opt out with ODYSSEUS_STT_PRELOAD=0.
+    if str(os.getenv("ODYSSEUS_STT_PRELOAD", "1")).lower() in {"1", "true", "yes", "on"}:
+        async def _preload_stt():
+            try:
+                loaded = await asyncio.to_thread(stt_service.preload)
+                if loaded:
+                    logger.info("[startup] Local Whisper (STT) model preloaded and resident")
+            except Exception as e:
+                logger.warning(f"STT preload failed (non-critical): {type(e).__name__}: {e}")
+
+        _startup_tasks.append(asyncio.create_task(_preload_stt()))
+    else:
+        logger.info("STT preload disabled (ODYSSEUS_STT_PRELOAD=0)")
+
     # Startup warmups are opt-in. They make later requests a little warmer, but
     # they also compete with the first seconds of real UI use on slow or busy
     # machines. Default to clear/idle startup and let requests warm what they use.
