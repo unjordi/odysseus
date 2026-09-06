@@ -111,10 +111,18 @@ REQUEST_TIMEOUT = 5
 # Substring matching — use the shortest unique prefix so variants get caught.
 KNOWN_CONTEXT_WINDOWS = {
     # --- Anthropic ---
+    # Claude 5 family (opus/sonnet/fable/haiku-4.5) — sin estas entradas la
+    # ventana quedaba "desconocida" → budget se degradaba a DEFAULT (~6000) y el
+    # contexto se borraba a media conversación (bug real 2026-09-06 con opus-5).
+    'claude-opus-5': 200000,
+    'claude-sonnet-5': 200000,
+    'claude-fable-5': 200000,
+    'claude-mythos-5': 200000,
     'claude-sonnet-4-5': 200000,
     'claude-sonnet-4-6': 200000,
     'claude-sonnet-4': 200000,
     'claude-opus-4': 200000,
+    'claude-haiku-4-5': 200000,
     'claude-haiku-4': 200000,
     'claude-haiku-3-5': 200000,
     'claude-3-5-sonnet': 200000,
