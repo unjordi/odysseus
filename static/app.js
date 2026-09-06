@@ -187,7 +187,7 @@ function initRailHoverLabels() {
     'rail-tasks': 'Tasks',
     'rail-theme': 'Theme',
     'rail-settings': 'Settings',
-    'rail-axoncfg': 'Axon Config',
+    'rail-axon': 'axon',
   };
   document.querySelectorAll('#icon-rail .icon-rail-btn').forEach(btn => {
     let span = btn.querySelector('.rail-hover-label');
@@ -396,7 +396,7 @@ function initializeEventListeners() {
   // controls.
   window.closeAllPopups = function closeAllPopups(except) {
     document.querySelectorAll(
-      '.export-dropdown-menu.open, .overflow-menu.open, .model-picker-menu.open, .doc-overflow-menu.open'
+      '.export-dropdown-menu.open, .overflow-menu.open, .model-picker-menu.open, .doc-overflow-menu.open, .axon-flyout.open'
     ).forEach(m => { if (m !== except) m.classList.remove('open'); });
     document.querySelectorAll(
       '.skill-kebab-menu, .note-reminder-menu, .task-dropdown, .doclib-card-dropdown, .email-card-dropdown, .msg-overflow-menu'
@@ -3789,10 +3789,8 @@ function startOdysseusApp() {
     'rail-memory':    'tool-memory-btn',
     'rail-theme':     'tool-theme-btn',
     'rail-email':     'email-section-title',
-    'rail-hoststats': 'tool-hoststats-btn',
-    'rail-axoncfg':   'tool-axoncfg-btn',
-    'rail-cortex':    'tool-cortex-btn',
-    'rail-term':      'tool-term-btn',
+    // NOTE: rail-hoststats/axoncfg/cortex/term were removed — those widgets now
+    // live behind the single #rail-axon launcher + #axon-flyout submenu below.
   };
   Object.entries(_railToolMap).forEach(([railId, toolId]) => {
     const railBtn = el(railId);
@@ -3803,6 +3801,55 @@ function startOdysseusApp() {
       });
     }
   });
+
+  // axon submenu — the single #rail-axon launcher toggles a flyout listing our
+  // grouped widgets; each item delegates to its hidden sidebar tool-*-btn opener
+  // (same indirection as _railToolMap). Mirrors the .export-dropdown-menu popup:
+  // reparented to <body> so ancestor transforms don't clip it, positioned next
+  // to the rail, dismissed on outside-click (also via closeAllPopups) + Escape.
+  const _railAxonBtn = el('rail-axon');
+  const _axonFlyout = el('axon-flyout');
+  if (_railAxonBtn && _axonFlyout) {
+    const _closeAxonFlyout = () => {
+      _axonFlyout.classList.remove('open');
+      _railAxonBtn.setAttribute('aria-expanded', 'false');
+    };
+    const _openAxonFlyout = () => {
+      // Move to body so the rail's scroll/transform context can't clip it.
+      if (_axonFlyout.parentElement !== document.body) document.body.appendChild(_axonFlyout);
+      const rect = _railAxonBtn.getBoundingClientRect();
+      // Anchor to the right edge of the rail button, vertically aligned to it.
+      _axonFlyout.style.top = rect.top + 'px';
+      _axonFlyout.style.left = (rect.right + 6) + 'px';
+      _axonFlyout.style.right = 'auto';
+      _axonFlyout.classList.add('open');
+      _railAxonBtn.setAttribute('aria-expanded', 'true');
+      // Nudge back into the viewport if it would overflow the bottom edge.
+      const fr = _axonFlyout.getBoundingClientRect();
+      if (fr.bottom > window.innerHeight - 8) {
+        _axonFlyout.style.top = Math.max(8, window.innerHeight - 8 - fr.height) + 'px';
+      }
+    };
+    _railAxonBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (_axonFlyout.classList.contains('open')) _closeAxonFlyout();
+      else _openAxonFlyout();
+    });
+    // Each flyout item opens its widget via the hidden tool button, then closes.
+    _axonFlyout.querySelectorAll('.axon-flyout-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const toolBtn = el(item.dataset.tool);
+        if (toolBtn) toolBtn.click();
+        _closeAxonFlyout();
+      });
+    });
+    // Outside-click + Escape (matches the export-dropdown behaviour).
+    document.addEventListener('click', () => _closeAxonFlyout());
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && _axonFlyout.classList.contains('open')) _closeAxonFlyout();
+    });
+  }
 
   // Rail chats — click to open the completed background session
   const _railChatsBtn = el('rail-chats');

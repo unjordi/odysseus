@@ -393,6 +393,38 @@ body.bg-pattern-sparkles {
       transition: background 0.1s;
     }
     .export-dropdown-item:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+    /* axon submenu flyout — grouped launcher popup off the icon rail.
+       Mirrors .export-dropdown-menu (fixed, body-appended, theme-aware). */
+    .axon-flyout {
+      display: none;
+      position: fixed;
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 8px; padding: 4px; min-width: 150px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+      z-index: 300;
+      color: var(--fg);
+    }
+    .axon-flyout.open { display: block; }
+    .axon-flyout-item {
+      all: unset;
+      box-sizing: border-box;
+      width: 100%;
+      display: flex; align-items: center; gap: 10px;
+      padding: 7px 8px; font-size: 12px; cursor: pointer;
+      border-radius: 6px; color: var(--fg); white-space: nowrap;
+      transition: background 0.1s;
+    }
+    .axon-flyout-item:hover,
+    .axon-flyout-item:focus-visible {
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
+    }
+    .axon-flyout-item svg {
+      width: 14px; height: 14px; flex-shrink: 0; opacity: 0.6;
+    }
+    @media (max-width: 768px) {
+      .axon-flyout { min-width: 200px; padding: 6px; border-radius: 10px; }
+      .axon-flyout-item { padding: 12px 14px; font-size: 14px; gap: 12px; min-height: 44px; }
+    }
     #export-compact-btn {
       justify-content: flex-start;
       gap: 10px;
@@ -652,8 +684,12 @@ body.bg-pattern-sparkles {
     #tools-section {
       margin-top: 1px;
     }
-    #tools-section .list-item {
+    #tools-section .list-item,
+    #axon-section .list-item {
       padding: 8px 8px;
+    }
+    #axon-section {
+      margin-top: 1px;
     }
     .sidebar.right-side .sidebar-header {
       justify-content: flex-start;
