@@ -91,7 +91,8 @@ function _ensureTerm() {
   if (!xterm || !_xtermAvailable()) return null;
   const term = new globalThis.Terminal({
     cursorBlink: true,
-    fontFamily: '"FiraCode", "Fira Code", Menlo, Consolas, monospace',
+    // Encabeza con la Nerd Font (glifos/powerline del prompt de unjordi); FiraCode/Menlo/… de fallback.
+    fontFamily: '"MesloLGSDZ Nerd Font", "FiraCode", "Fira Code", Menlo, Consolas, monospace',
     fontSize: 13,
     scrollback: 5000,
     theme: { background: '#1e1e2e', foreground: '#cdd6f4' },
@@ -103,6 +104,21 @@ function _ensureTerm() {
     }
   } catch { _fit = null; }
   term.open(xterm);
+  // Alt-screen (vim/top/claude TUI): sin scrollback → marca el contenedor para ocultar la scrollbar (Fix 3).
+  try {
+    if (term.buffer && typeof term.buffer.onBufferChange === 'function') {
+      term.buffer.onBufferChange(() => {
+        const alt = term.buffer.active && term.buffer.active.type === 'alternate';
+        xterm.classList.toggle('term-alt-screen', !!alt);
+      });
+    }
+  } catch { /* API de buffer no disponible: el CSS overflow:auto ya cubre el caso normal */ }
+  // Re-fit cuando la Nerd Font YA cargó: la 1ª medición pudo usar la métrica del fallback (cols/rows erróneos).
+  try {
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(() => { if (_term === term) _fitNow(); }).catch(() => {});
+    }
+  } catch { /* sin FontFaceSet: la fuente cargará y el próximo resize re-fitea */ }
   // teclado del usuario → stdin del PTY (bytes crudos; xterm ya traduce Enter/Ctrl-C/flechas a las secuencias).
   term.onData((data) => {
     if (_ws && _ptyConnected) { try { _ws.send(new TextEncoder().encode(data)); } catch { /* ws cerrado */ } }

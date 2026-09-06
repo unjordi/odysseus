@@ -42124,6 +42124,19 @@ body.hoststats-compact-docked .chat-input-bar {
   height: 60vh;            /* alto por defecto del modal de terminal (ajústalo a tu layout) */
 }
 
+/* Nerd Font de la terminal (MesloLGSDZ) — self-hosted en /static/lib/fonts (CSP 'self', sin CDN).
+   La usa xterm.js (fontFamily en terminal.js) para los glifos/powerline del prompt. */
+@font-face {
+  font-family: 'MesloLGSDZ Nerd Font';
+  font-weight: 400; font-style: normal; font-display: swap;
+  src: url('/static/lib/fonts/MesloLGSDZNerdFont-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'MesloLGSDZ Nerd Font';
+  font-weight: 700; font-style: normal; font-display: swap;
+  src: url('/static/lib/fonts/MesloLGSDZNerdFont-Bold.woff2') format('woff2');
+}
+
 /* Contenedor del emulador xterm.js (modo PTY). Debe tener tamaño concreto ANTES de fit(). */
 #term-xterm.term-xterm {
   flex: 1 1 auto;
@@ -42132,16 +42145,42 @@ body.hoststats-compact-docked .chat-input-bar {
   padding: 6px 8px;
   box-sizing: border-box;
   background: #1e1e2e;      /* calza con el theme.background de xterm en terminal.js */
-  overflow: hidden;         /* xterm maneja su propio scroll interno */
+  overflow: hidden;         /* xterm maneja su propio scroll interno; nada asoma fuera del contenedor */
 }
 
-/* xterm ocupa todo su contenedor. */
+/* xterm ocupa el ANCHO del contenedor. El ALTO lo calcula xterm (rows*cellHeight, múltiplo EXACTO de
+   la fila) → la última fila NUNCA queda a medias. Forzar height:100% dejaba una fila parcial cuando el
+   alto del contenedor no era múltiplo del alto de fila (Fix 2). El sobrante bajo la rejilla muestra el
+   fondo #1e1e2e, limpio. */
 #term-xterm .xterm,
 #term-xterm .xterm-viewport,
 #term-xterm .xterm-screen {
   width: 100% !important;
-  height: 100% !important;
 }
+
+/* Scrollbar SOLO cuando de verdad hay overflow (Fix 3). xterm.css fuerza overflow-y:scroll (barra
+   siempre visible) → lo bajamos a auto: sin scrollback que quepa, no hay barra. */
+#term-xterm .xterm-viewport {
+  overflow-y: auto !important;
+  background-color: transparent !important;  /* xterm.css la ponía #000; deja ver el theme */
+  scrollbar-width: thin;                      /* Firefox: barra delgada */
+  scrollbar-color: rgba(205, 214, 244, 0.28) transparent;
+}
+/* WebKit/Blink: barra fina, overlay, discreta; el track transparente. */
+#term-xterm .xterm-viewport::-webkit-scrollbar { width: 8px; height: 8px; }
+#term-xterm .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
+#term-xterm .xterm-viewport::-webkit-scrollbar-thumb {
+  background: rgba(205, 214, 244, 0.24);
+  border-radius: 4px;
+}
+#term-xterm .xterm-viewport:hover::-webkit-scrollbar-thumb { background: rgba(205, 214, 244, 0.4); }
+
+/* Alt-screen (vim/top/claude TUI): sin scrollback → jamás scrollbar, área limpia como en la TUI real. */
+#term-xterm.term-alt-screen .xterm-viewport {
+  overflow-y: hidden !important;
+  scrollbar-width: none;
+}
+#term-xterm.term-alt-screen .xterm-viewport::-webkit-scrollbar { display: none; }
 
 /* Modo one-shot degradado: se comporta como el layout anterior (columna con <pre> + fila de input). */
 #term-oneshot.term-oneshot {
