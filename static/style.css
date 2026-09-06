@@ -42124,17 +42124,18 @@ body.hoststats-compact-docked .chat-input-bar {
   height: 60vh;            /* alto por defecto del modal de terminal (ajústalo a tu layout) */
 }
 
-/* Nerd Font de la terminal (MesloLGSDZ) — self-hosted en /static/lib/fonts (CSP 'self', sin CDN).
-   La usa xterm.js (fontFamily en terminal.js) para los glifos/powerline del prompt. */
+/* Nerd Font de la terminal (MesloLGSDZ Nerd Font MONO) — self-hosted en /static/lib/fonts (CSP 'self', sin CDN).
+   Variante MONO (ancho fijo): los glifos Nerd/powerline caben en UNA celda → sin desfase del prompt ni clip
+   del 1er ícono (la no-Mono los rendea más anchos que la celda y desalinea). La usa xterm.js (fontFamily). */
 @font-face {
-  font-family: 'MesloLGSDZ Nerd Font';
+  font-family: 'MesloLGSDZ Nerd Font Mono';
   font-weight: 400; font-style: normal; font-display: swap;
-  src: url('/static/lib/fonts/MesloLGSDZNerdFont-Regular.woff2') format('woff2');
+  src: url('/static/lib/fonts/MesloLGSDZNerdFontMono-Regular.woff2') format('woff2');
 }
 @font-face {
-  font-family: 'MesloLGSDZ Nerd Font';
+  font-family: 'MesloLGSDZ Nerd Font Mono';
   font-weight: 700; font-style: normal; font-display: swap;
-  src: url('/static/lib/fonts/MesloLGSDZNerdFont-Bold.woff2') format('woff2');
+  src: url('/static/lib/fonts/MesloLGSDZNerdFontMono-Bold.woff2') format('woff2');
 }
 
 /* Contenedor del emulador xterm.js (modo PTY). Debe tener tamaño concreto ANTES de fit(). */

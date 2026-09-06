@@ -187,6 +187,7 @@ function initRailHoverLabels() {
     'rail-tasks': 'Tasks',
     'rail-theme': 'Theme',
     'rail-settings': 'Settings',
+    'rail-axoncfg': 'Axon Config',
     'rail-axon': 'axon',
   };
   document.querySelectorAll('#icon-rail .icon-rail-btn').forEach(btn => {
@@ -3789,8 +3790,9 @@ function startOdysseusApp() {
     'rail-memory':    'tool-memory-btn',
     'rail-theme':     'tool-theme-btn',
     'rail-email':     'email-section-title',
-    // NOTE: rail-hoststats/axoncfg/cortex/term were removed — those widgets now
-    // live behind the single #rail-axon launcher + #axon-flyout submenu below.
+    'rail-axoncfg':   'tool-axoncfg-btn', // Axon Config vive en el FOOTER del rail (config, junto a Settings), no en el flyout
+    // NOTE: rail-hoststats/cortex/term were removed — esos widgets viven tras el
+    // launcher único #rail-axon + el submenú #axon-flyout de abajo.
   };
   Object.entries(_railToolMap).forEach(([railId, toolId]) => {
     const railBtn = el(railId);

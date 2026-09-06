@@ -92,7 +92,7 @@ function _ensureTerm() {
   const term = new globalThis.Terminal({
     cursorBlink: true,
     // Encabeza con la Nerd Font (glifos/powerline del prompt de unjordi); FiraCode/Menlo/… de fallback.
-    fontFamily: '"MesloLGSDZ Nerd Font", "FiraCode", "Fira Code", Menlo, Consolas, monospace',
+    fontFamily: '"MesloLGSDZ Nerd Font Mono", "FiraCode", "Fira Code", Menlo, Consolas, monospace',
     fontSize: 13,
     scrollback: 5000,
     theme: { background: '#1e1e2e', foreground: '#cdd6f4' },
