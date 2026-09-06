@@ -92,7 +92,9 @@ services:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
       # NVIDIA overlay (from docker/gpu.nvidia.yml).
-      - NVIDIA_VISIBLE_DEVICES=all
+      # Cachy: '=all' solo enumera 1 de 2 GPUs heterogéneas (5070Ti Blackwell + A4000 Ampere);
+      # listar los IDs explícitos expone AMBAS (device_ids abajo hace lo mismo en el device-request).
+      - NVIDIA_VISIBLE_DEVICES=0,1
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     depends_on:
       searxng:
@@ -106,7 +108,8 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: all
+              # Cachy: 'count: all' solo expone 1 de 2 GPUs heterogéneas; device_ids explícitos exponen AMBAS.
+              device_ids: ["0", "1"]
               capabilities: [gpu]
 
   chromadb:

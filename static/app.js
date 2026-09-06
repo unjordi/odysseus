@@ -3748,6 +3748,7 @@ function startOdysseusApp() {
     'rail-memory':    'tool-memory-btn',
     'rail-theme':     'tool-theme-btn',
     'rail-email':     'email-section-title',
+    'rail-hoststats': 'tool-hoststats-btn',
   };
   Object.entries(_railToolMap).forEach(([railId, toolId]) => {
     const railBtn = el(railId);
