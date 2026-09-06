@@ -14,6 +14,14 @@ from src.constants import TTS_CACHE_DIR
 
 logger = logging.getLogger(__name__)
 
+# Built-in "kokoro" provider → the OpenAI-compatible Kokoro-FastAPI sidecar
+# (docker/gpu.tts.yml), reachable over the compose network as http://tts:8880.
+# This is the FUNCTIONAL local path in Docker: the in-container "local" provider
+# is dead on Python 3.14 (kokoro==0.9.4 needs >=3.10,<3.13), so the sidecar is
+# how Odysseus gets natural, multilingual (incl. Spanish) local TTS with no
+# manual ModelEndpoint to hand-create. Override for non-Docker/custom deploys.
+KOKORO_SIDECAR_URL = os.getenv("ODYSSEUS_TTS_SIDECAR_URL", "http://tts:8880/v1")
+
 
 def _safe_speed(value, default: float = 1.0) -> float:
     """Parse the stored tts_speed defensively. The settings layer tolerates
@@ -34,7 +42,10 @@ class TTSService:
     Providers:
       "disabled"        — no TTS
       "browser"         — client-side Web Speech API (no server synthesis)
-      "local"           — Kokoro-82M on GPU
+      "kokoro"          — OpenAI-compatible Kokoro-FastAPI sidecar (default;
+                          natural Spanish/multilingual, no ModelEndpoint needed)
+      "local"           — in-process Kokoro-82M on GPU (native install only;
+                          dead in the py3.14 Docker image → use "kokoro")
       "endpoint:<id>"   — OpenAI-compatible /audio/speech via ModelEndpoint
     """
 
@@ -55,9 +66,9 @@ class TTSService:
         saved = load_settings()
         return {
             "tts_enabled": saved.get("tts_enabled", True),
-            "tts_provider": saved.get("tts_provider", "disabled"),
-            "tts_model": saved.get("tts_model", "tts-1"),
-            "tts_voice": saved.get("tts_voice", "alloy"),
+            "tts_provider": saved.get("tts_provider", "kokoro"),
+            "tts_model": saved.get("tts_model", "kokoro"),
+            "tts_voice": saved.get("tts_voice", "ef_dora"),
             "tts_speed": saved.get("tts_speed", "1"),
         }
 
@@ -71,6 +82,8 @@ class TTSService:
             return False
         if provider == "browser":
             return True  # handled client-side
+        if provider == "kokoro":
+            return True  # sidecar assumed reachable; errors surface at synthesis
         if provider == "local":
             kokoro = self._get_kokoro()
             return kokoro is not None and kokoro.available
@@ -156,23 +169,14 @@ class TTSService:
             self._kokoro = _KokoroPipeline()
         return self._kokoro
 
-    # ── API endpoint ──
+    # ── OpenAI-compatible /audio/speech (kokoro sidecar + endpoint providers) ──
 
-    def _synthesize_api(self, text: str, endpoint_id: str, model: str, voice: str, speed: float = 1.0) -> Optional[bytes]:
-        from src.database import SessionLocal, ModelEndpoint
-
-        db = SessionLocal()
-        try:
-            ep = db.query(ModelEndpoint).filter(ModelEndpoint.id == endpoint_id).first()
-            if not ep:
-                logger.error(f"TTS endpoint {endpoint_id} not found")
-                return None
-            base_url = ep.base_url.rstrip("/")
-            api_key = ep.api_key
-        finally:
-            db.close()
-
-        url = base_url + "/audio/speech"
+    def _openai_speech_post(self, base_url: str, api_key: Optional[str], text: str,
+                            model: str, voice: str, speed: float = 1.0) -> Optional[bytes]:
+        """POST to an OpenAI-compatible /audio/speech endpoint. Shared by the
+        built-in `kokoro` sidecar provider and the `endpoint:<id>` provider so
+        the request contract never diverges between them."""
+        url = base_url.rstrip("/") + "/audio/speech"
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -188,11 +192,33 @@ class TTSService:
         try:
             r = httpx.post(url, json=payload, headers=headers, timeout=60)
             r.raise_for_status()
-            logger.info(f"API TTS: {len(r.content)} bytes from {base_url}")
+            logger.info(f"OpenAI-TTS: {len(r.content)} bytes from {url}")
             return r.content
         except Exception as e:
-            logger.error(f"API TTS synthesis failed: {e}")
+            logger.error(f"OpenAI-compatible TTS synthesis failed ({url}): {e}")
             return None
+
+    def _synthesize_sidecar(self, text: str, model: str, voice: str, speed: float = 1.0) -> Optional[bytes]:
+        """Built-in `kokoro` provider → the local Kokoro-FastAPI sidecar."""
+        return self._openai_speech_post(
+            KOKORO_SIDECAR_URL, None, text, model or "kokoro", voice or "ef_dora", speed
+        )
+
+    def _synthesize_api(self, text: str, endpoint_id: str, model: str, voice: str, speed: float = 1.0) -> Optional[bytes]:
+        from src.database import SessionLocal, ModelEndpoint
+
+        db = SessionLocal()
+        try:
+            ep = db.query(ModelEndpoint).filter(ModelEndpoint.id == endpoint_id).first()
+            if not ep:
+                logger.error(f"TTS endpoint {endpoint_id} not found")
+                return None
+            base_url = ep.base_url
+            api_key = ep.api_key
+        finally:
+            db.close()
+
+        return self._openai_speech_post(base_url, api_key, text, model, voice, speed)
 
     # ── Public interface ──
 
@@ -220,7 +246,9 @@ class TTSService:
 
         audio_data = None
 
-        if provider == "local":
+        if provider == "kokoro":
+            audio_data = self._synthesize_sidecar(text, model, voice, speed)
+        elif provider == "local":
             kokoro = self._get_kokoro()
             if kokoro and kokoro.available:
                 audio_data = kokoro.synthesize_raw(text, voice)
@@ -270,7 +298,10 @@ class TTSService:
             "cache_size_mb": round(cache_size / (1024 * 1024), 2),
         }
 
-        if provider == "local":
+        if provider == "kokoro":
+            stats["model"] = "Kokoro-FastAPI (local sidecar)"
+            stats["sidecar_url"] = KOKORO_SIDECAR_URL
+        elif provider == "local":
             kokoro = self._get_kokoro()
             stats["model"] = "Kokoro-82M (GPU)" if (kokoro and kokoro.available) else "Kokoro (not loaded)"
         elif provider == "browser":
