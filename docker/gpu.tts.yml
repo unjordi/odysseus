@@ -27,8 +27,14 @@
 
 services:
   tts:
-    # Pinned tag — bump deliberately. GPU image bundles PyTorch + CUDA.
-    image: ghcr.io/remsky/kokoro-fastapi-gpu:v0.2.4
+    # Imagen CPU por DEFAULT (portable, sin dependencia de GPU). Kokoro es un
+    # modelo chico → la síntesis en CPU es perfectamente usable para read-aloud.
+    # ⚠️ La imagen GPU (`kokoro-fastapi-gpu:v0.2.4`) trae un PyTorch cuyos kernels
+    # NO cubren GPUs muy nuevas: en Blackwell (sm_120, p. ej. RTX 50xx) revienta con
+    # "CUDA error: no kernel image is available for execution on the device". Si tu
+    # GPU es soportada (Ampere/Ada) puedes volver a la imagen GPU + USE_GPU=true +
+    # el bloque `deploy.resources` de abajo. Override: KOKORO_TTS_IMAGE.
+    image: ${KOKORO_TTS_IMAGE:-ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4}
     restart: unless-stopped
     # Odysseus reaches it over the compose network as http://tts:8880. Also
     # exposed on the host loopback so you can probe/curl it directly (harmless;
@@ -37,23 +43,29 @@ services:
       - "127.0.0.1:8880:8880"
     environment:
       # Kokoro-FastAPI reads its model/voices from its own bundled cache.
-      - USE_GPU=true
+      - USE_GPU=false
     volumes:
       # Persist the downloaded Kokoro weights (~330 MB) across recreates.
-      - ${APP_DATA_DIR:-./data}/tts_models:/app/api/src/models:z
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+      # NAMED volume (not a host bind mount): un bind-mount lo crea docker como
+      # root:root → el `appuser` no-root del image NO puede escribir ahí y el
+      # download del modelo revienta con PermissionError [Errno 13] en
+      # api/src/models/v1_0. El volumen nombrado hereda el ownership del
+      # directorio del image en el primer mount → appuser escribe sin choque de UID.
+      - tts_models:/app/api/src/models
+    # (GPU reservation OMITIDA — imagen CPU. Si vuelves a la imagen GPU en una
+    #  arquitectura soportada, re-añade:
+    #    deploy: { resources: { reservations: { devices: [{driver: nvidia, count: 1, capabilities: [gpu]}] } } })
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; urllib.request.urlopen('http://localhost:8880/health', timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 90s   # first boot downloads weights
+
+volumes:
+  # Cache persistente de los pesos Kokoro (~330 MB). Named volume → ownership
+  # correcto para el appuser del image (ver nota en el mount de arriba).
+  tts_models:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ALTERNATIVE (premium Spanish naturalness): Chatterbox Multilingual.
