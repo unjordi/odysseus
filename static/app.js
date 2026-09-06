@@ -3983,16 +3983,11 @@ function startOdysseusApp() {
   // without the draft guard won and ate unsent multi-line prompts (#5862).
 
   const _sendIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
-  const _micIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>';
   const _stopIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
   const _newChatIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
 
   // Expose icons globally so chat.js updateSubmitButton can use them
-  window._odysseusBtnIcons = { send: _sendIcon, mic: _micIcon, stop: _stopIcon, newChat: _newChatIcon };
-
-  function _isSttEnabled() {
-    return voiceRecorderModule._sttProvider && voiceRecorderModule._sttProvider !== 'disabled';
-  }
+  window._odysseusBtnIcons = { send: _sendIcon, stop: _stopIcon, newChat: _newChatIcon };
 
   function _hasAttachments() {
     return fileHandlerModule.getPendingCount && fileHandlerModule.getPendingCount() > 0;
@@ -4004,7 +3999,7 @@ function startOdysseusApp() {
     const nextPhase = hasText ? 'queue' : 'processing';
     if (sendBtn.dataset.phase === nextPhase) return true;
     sendBtn.dataset.phase = nextPhase;
-    sendBtn.classList.remove('mic-mode', 'newchat-mode', 'newchat-expanded', 'anim-spin', 'anim-launch', 'anim-land');
+    sendBtn.classList.remove('newchat-mode', 'newchat-expanded', 'anim-spin', 'anim-launch', 'anim-land');
     if (hasText) {
       sendBtn.innerHTML = _sendIcon;
       sendBtn.title = 'Queue message';
@@ -4021,27 +4016,18 @@ function startOdysseusApp() {
       _updateStreamingSubmitButton();
       return;
     }
-    // Don't override if recording
-    if (sendBtn.dataset.mode === 'recording') return;
     const prevMode = sendBtn.dataset.mode || '';
     const hasText = messageInput && messageInput.value.trim().length > 0;
     const hasFiles = _hasAttachments();
     let newMode;
-    if (!hasText && !hasFiles && _isSttEnabled()) {
-      clearTimeout(sendBtn._collapseTimer);
-      sendBtn.innerHTML = _micIcon;
-      sendBtn.title = 'Record voice';
-      newMode = 'mic';
-      sendBtn.classList.add('mic-mode');
-      sendBtn.classList.remove('newchat-mode', 'newchat-expanded');
-    } else if (!hasText && !hasFiles && !_isSttEnabled()) {
+    if (!hasText && !hasFiles) {
       clearTimeout(sendBtn._collapseTimer);
       // Group chat: always show send button, never newchat mode
       if (groupModule && groupModule.isActive()) {
         sendBtn.innerHTML = _sendIcon;
         sendBtn.title = 'Send to group';
         newMode = 'idle';
-        sendBtn.classList.remove('mic-mode', 'newchat-mode', 'newchat-expanded');
+        sendBtn.classList.remove('newchat-mode', 'newchat-expanded');
       } else {
       // Check if we're already on a fresh empty session (welcome screen visible)
       const isEmptySession = document.getElementById('chat-container')?.classList.contains('welcome-active');
@@ -4051,14 +4037,13 @@ function startOdysseusApp() {
         sendBtn.title = 'Send message';
         newMode = 'idle';
         sendBtn.classList.add('newchat-mode'); // muted gray style
-        sendBtn.classList.remove('mic-mode', 'newchat-expanded');
+        sendBtn.classList.remove('newchat-expanded');
         clearTimeout(sendBtn._expandTimer);
       } else {
         sendBtn.innerHTML = _newChatIcon + '<span class="send-btn-label">+ New</span>';
         sendBtn.title = 'New chat';
         newMode = 'newchat';
         sendBtn.classList.add('newchat-mode');
-        sendBtn.classList.remove('mic-mode');
         // The button stays a 32px compact icon (no auto-expand to label —
         // the "+ New" label inside is for screen readers only; sighted users
         // see the spinning + on hover + the title tooltip).
@@ -4070,7 +4055,7 @@ function startOdysseusApp() {
       newMode = 'send';
       clearTimeout(sendBtn._expandTimer);
       const wasExpanded = sendBtn.classList.contains('newchat-expanded');
-      const wasNewchat = prevMode === 'newchat' || prevMode === 'mic';
+      const wasNewchat = prevMode === 'newchat';
       if (wasExpanded || wasNewchat) {
         // Collapse pill if expanded, then spin arrow in (same as + spin-in)
         if (wasExpanded) sendBtn.classList.remove('newchat-expanded');
@@ -4079,23 +4064,23 @@ function startOdysseusApp() {
           if (sendBtn.dataset.mode !== 'send') return;
           sendBtn.innerHTML = _sendIcon;
           sendBtn.title = 'Send message';
-          sendBtn.classList.remove('mic-mode', 'newchat-mode', 'anim-spin-swap');
+          sendBtn.classList.remove('newchat-mode', 'anim-spin-swap');
           sendBtn.classList.add('anim-spin');
           sendBtn.addEventListener('animationend', () => sendBtn.classList.remove('anim-spin'), { once: true });
         }, delay);
       } else {
         sendBtn.innerHTML = _sendIcon;
         sendBtn.title = 'Send message';
-        sendBtn.classList.remove('mic-mode', 'newchat-mode', 'newchat-expanded', 'anim-spin', 'anim-launch', 'anim-land');
+        sendBtn.classList.remove('newchat-mode', 'newchat-expanded', 'anim-spin', 'anim-launch', 'anim-land');
       }
     }
-    // Animate icon spin — when switching TO newchat or mic (the + or mic
-    // appearing). The previous `prevMode && ...` guard skipped this after
-    // streaming ended (dataset.mode is reset to '' there, an empty falsy
-    // string), which let the lingering anim-land class from the stop icon's
-    // entry replay on the +, making it look like the + comes from below.
+    // Animate icon spin — when switching TO newchat (the + appearing). The
+    // previous `prevMode && ...` guard skipped this after streaming ended
+    // (dataset.mode is reset to '' there, an empty falsy string), which let
+    // the lingering anim-land class from the stop icon's entry replay on the
+    // +, making it look like the + comes from below.
     // Never animate into send mode (arrow) — it should just appear instantly.
-    if (newMode !== prevMode && (newMode === 'newchat' || newMode === 'mic')) {
+    if (newMode !== prevMode && newMode === 'newchat') {
       if (!sendBtn.classList.contains('anim-spin')) {
         sendBtn.classList.remove('anim-launch', 'anim-land');
         sendBtn.classList.add('anim-spin');
@@ -4109,12 +4094,6 @@ function startOdysseusApp() {
     sendBtn.addEventListener('click', (e) => {
       e.preventDefault();
 
-      // If recording, stop recording
-      if (sendBtn.dataset.mode === 'recording' || voiceRecorderModule.getIsRecording()) {
-        voiceRecorderModule.stopRecording();
-        return;
-      }
-
       const hasText = messageInput && messageInput.value.trim().length > 0;
       const hasFiles = _hasAttachments();
 
@@ -4124,7 +4103,7 @@ function startOdysseusApp() {
         return;
       }
 
-      // New chat mode — empty input, no attachments, no STT
+      // New chat mode — empty input, no attachments
       if (!hasText && !hasFiles && sendBtn.dataset.mode === 'newchat') {
         if (sessionModule) {
           const sessions = sessionModule.getSessions();
@@ -4138,20 +4117,6 @@ function startOdysseusApp() {
             if (railNew) railNew.click();
           }
         }
-        return;
-      }
-
-      // If input is empty and STT is enabled, start recording
-      if (!hasText && !hasFiles && _isSttEnabled()) {
-        sendBtn.innerHTML = _stopIcon;
-        sendBtn.title = 'Stop recording';
-        sendBtn.dataset.mode = 'recording';
-        sendBtn.classList.add('recording');
-        voiceRecorderModule.startRecording(
-          (audioFile) => fileHandlerModule.addFiles([audioFile]),
-          uiModule.showToast,
-          uiModule.showError
-        );
         return;
       }
 
@@ -4444,9 +4409,10 @@ function startOdysseusApp() {
 	  if (censorModule) censorModule.init();
 
 	  // ── Dedicated composer mic button: whisper-flow style dictation ──
-	  // Distinct from the send-button's mic overlay (which only appears when
-	  // the composer is empty and does one batch recording). This one lives
-	  // in .chat-input-left, works even with existing text in the box, and
+	  // This is the ONLY mic control in the composer (the send-button used to
+	  // grow a mic overlay of its own when empty; that duplicate was removed —
+	  // see voiceRecorder.js's header comment). This one lives in
+	  // .chat-input-left, works even with existing text in the box, and
 	  // streams text in as the user talks instead of waiting for Stop.
 	  (function initVoiceFlowButton() {
 	    const btn = document.getElementById('voice-input-btn');
@@ -4514,8 +4480,7 @@ function startOdysseusApp() {
 	      });
 	    }
 
-	    // Hide the button entirely when STT is off — same gating the
-	    // send-button's mic overlay already applies, so we never show a
+	    // Hide the button entirely when STT is off, so we never show a
 	    // control that can't work. Kept in sync (no reload needed) via
 	    // voiceRecorder.js calling window._syncVoiceFlowAvailability on any
 	    // provider change (settings save, or the initial /api/stt/stats fetch).

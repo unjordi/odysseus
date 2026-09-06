@@ -9,10 +9,7 @@
  *   "local"          — send recording to server /api/stt/transcribe (Whisper)
  *   "endpoint:<id>"  — send recording to server /api/stt/transcribe (API)
  *
- * Two capture modes live here:
- *   - startRecording/stopRecording — legacy single-shot batch capture (used by
- *     the send-button's mic overlay): records one clip start-to-stop, then
- *     transcribes it once.
+ * Capture mode:
  *   - startWhisperFlow/stopWhisperFlow — continuous "whisper-flow" dictation
  *     (used by the dedicated composer mic button, #voice-input-btn): keeps
  *     listening and inserts text into the composer as it goes, so it feels
@@ -20,30 +17,25 @@
  *     "browser" gets true incremental results from the Web Speech API;
  *     "local"/"endpoint:<id>" fake the streaming feel by restarting a short
  *     (~3.5s) recording in a loop and transcribing each segment as it lands.
+ *
+ * There used to be a second mode here — startRecording/stopRecording, a
+ * legacy single-shot batch capture wired to a mic overlay that the send
+ * button grew when the composer was empty. That overlay was a broken
+ * duplicate of the composer mic button above and was removed (along with
+ * this batch-capture code) so #voice-input-btn is the only mic control.
  */
-
-let mediaRecorder = null;
-let audioChunks = [];
-let isRecording = false;
-let recordingStartTime = null;
-let recordingInterval = null;
-
-// Browser STT state
-let _recognition = null;
-let _browserTranscript = '';
 
 // Cached STT provider — refreshed on settings change
 let _sttProvider = 'disabled';
 
 /**
  * Set the cached provider and notify anyone rendering STT-dependent UI
- * (the send button's mic overlay, and the dedicated composer mic button).
- * This is the single place that mutates `_sttProvider` so both the settings
- * panel (via the exported setter) and our own fetch below stay in sync.
+ * (currently just the dedicated composer mic button). This is the single
+ * place that mutates `_sttProvider` so both the settings panel (via the
+ * exported setter) and our own fetch below stay in sync.
  */
 function _setSttProvider(v) {
   _sttProvider = v || 'disabled';
-  if (window._updateSendBtnIcon) window._updateSendBtnIcon();
   if (window._syncVoiceFlowAvailability) window._syncVoiceFlowAvailability();
 }
 
@@ -63,72 +55,8 @@ async function refreshSttProvider() {
 }
 
 /**
- * Format seconds as MM:SS
- */
-function formatTime(seconds) {
-  const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
-  const secs = (seconds % 60).toString().padStart(2, '0');
-  return `${mins}:${secs}`;
-}
-
-/**
- * Reset UI state after recording ends
- */
-function _resetRecordingUI() {
-  isRecording = false;
-  if (recordingInterval) {
-    clearInterval(recordingInterval);
-    recordingInterval = null;
-  }
-  // Reset send button via global callback
-  const sendBtn = document.querySelector('.send-btn');
-  if (sendBtn) {
-    sendBtn.classList.remove('recording');
-    sendBtn.dataset.mode = '';
-  }
-  if (window._updateSendBtnIcon) {
-    setTimeout(window._updateSendBtnIcon, 50);
-  }
-}
-
-/**
- * Start browser speech recognition alongside recording
- */
-function startBrowserSTT() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) return;
-
-  _browserTranscript = '';
-  _recognition = new SpeechRecognition();
-  _recognition.continuous = true;
-  _recognition.interimResults = false;
-  _recognition.lang = '';
-
-  _recognition.onresult = (event) => {
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      if (event.results[i].isFinal) {
-        _browserTranscript += event.results[i][0].transcript + ' ';
-      }
-    }
-  };
-
-  _recognition.onerror = (e) => {
-    console.warn('Browser STT error:', e.error);
-  };
-
-  _recognition.start();
-}
-
-function stopBrowserSTT() {
-  if (_recognition) {
-    try { _recognition.stop(); } catch (e) { /* ignore */ }
-    _recognition = null;
-  }
-  return _browserTranscript.trim();
-}
-
-/**
- * Send audio to server for transcription
+ * Send audio to server for transcription. Shared by whisper-flow's
+ * per-segment transcription below.
  */
 async function transcribeOnServer(audioBlob) {
   const formData = new FormData();
@@ -147,24 +75,6 @@ async function transcribeOnServer(audioBlob) {
 
   const data = await res.json();
   return data.text || '';
-}
-
-/**
- * Insert transcribed text into the chat input
- */
-function insertTranscription(text, showToast) {
-  if (!text) return;
-  const input = document.getElementById('message');
-  if (!input) return;
-
-  const existing = input.value.trim();
-  input.value = existing ? existing + ' ' + text : text;
-
-  // Trigger auto-resize and icon update
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-  input.focus();
-
-  if (showToast) showToast('Transcribed');
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -321,7 +231,7 @@ function _recordFlowSegment(stream) {
  */
 export function startWhisperFlow(opts) {
   const { onInsert, onState, showToast, showError } = opts || {};
-  if (_flowActive || isRecording) return; // one capture session at a time
+  if (_flowActive) return; // one capture session at a time
 
   if (!window.isSecureContext) {
     if (showError) showError('Microphone requires HTTPS. Use a reverse proxy with SSL or access via localhost.');
@@ -417,136 +327,13 @@ export function isWhisperFlowActive() {
 }
 
 /**
- * Start voice recording
- */
-export function startRecording(onFileCreated, showToast, showError) {
-  if (_flowActive) return; // whisper-flow dictation already owns the mic
-
-  // Check for secure context (getUserMedia requires HTTPS or localhost)
-  if (!window.isSecureContext) {
-    if (showError) showError('Microphone requires HTTPS. Use a reverse proxy with SSL or access via localhost.');
-    _resetRecordingUI();
-    return;
-  }
-
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    if (showError) showError('Microphone not supported in this browser.');
-    _resetRecordingUI();
-    return;
-  }
-
-  audioChunks = [];
-
-  navigator.mediaDevices.getUserMedia({ audio: true })
-    .then(stream => {
-      mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-
-      mediaRecorder.ondataavailable = event => {
-        if (event.data.size > 0) {
-          audioChunks.push(event.data);
-        }
-      };
-
-      mediaRecorder.onstop = async () => {
-        stream.getTracks().forEach(track => track.stop());
-
-        const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-        const provider = _sttProvider;
-
-        if (provider === 'browser') {
-          const transcript = stopBrowserSTT();
-          if (transcript) {
-            insertTranscription(transcript, showToast);
-          } else {
-            if (showToast) showToast('No speech detected');
-            const audioFile = new File([audioBlob], `voice-message-${Date.now()}.webm`, { type: 'audio/webm' });
-            if (onFileCreated) onFileCreated(audioFile);
-          }
-        } else if (provider === 'local' || provider.startsWith('endpoint:')) {
-          // Show "Transcribing..." feedback
-          if (showToast) showToast('Transcribing...', 5000);
-          try {
-            const transcript = await transcribeOnServer(audioBlob);
-            if (transcript) {
-              insertTranscription(transcript, showToast);
-            } else {
-              if (showToast) showToast('No speech detected');
-            }
-          } catch (e) {
-            console.error('STT transcription error:', e);
-            if (showError) showError('Transcription failed: ' + e.message);
-            // Fallback: attach as file
-            const audioFile = new File([audioBlob], `voice-message-${Date.now()}.webm`, { type: 'audio/webm' });
-            if (onFileCreated) onFileCreated(audioFile);
-          }
-        } else {
-          // STT disabled — attach audio file
-          const audioFile = new File([audioBlob], `voice-message-${Date.now()}.webm`, { type: 'audio/webm' });
-          if (onFileCreated) onFileCreated(audioFile);
-        }
-
-        _resetRecordingUI();
-      };
-
-      mediaRecorder.start();
-      isRecording = true;
-      recordingStartTime = new Date();
-
-      // Start browser STT if that's the provider
-      if (_sttProvider === 'browser') {
-        startBrowserSTT();
-      }
-
-      if (showToast) {
-        showToast('Recording...');
-      }
-    })
-    .catch(error => {
-      console.error('Microphone access error:', error);
-      if (showError) {
-        if (error.name === 'NotAllowedError') {
-          showError('Microphone access denied. Check browser permissions.');
-        } else if (error.name === 'NotFoundError') {
-          showError('No microphone found.');
-        } else {
-          showError('Microphone error: ' + error.message);
-        }
-      }
-      _resetRecordingUI();
-    });
-}
-
-/**
- * Stop voice recording
- */
-export function stopRecording() {
-  if (mediaRecorder && mediaRecorder.state === 'recording') {
-    mediaRecorder.stop();
-    // isRecording will be set to false in _resetRecordingUI called from onstop
-  } else {
-    _resetRecordingUI();
-  }
-}
-
-/**
- * Check if currently recording
- */
-export function getIsRecording() {
-  return isRecording;
-}
-
-/**
- * Initialize recording state
+ * Initialize module state (fetches the current STT provider).
  */
 export function init() {
-  isRecording = false;
   refreshSttProvider();
 }
 
 const voiceRecorderModule = {
-  startRecording,
-  stopRecording,
-  getIsRecording,
   startWhisperFlow,
   stopWhisperFlow,
   isWhisperFlowActive,
