@@ -1289,6 +1289,74 @@ async def _startup_event():
     from src.cookbook_serve_lifecycle import cookbook_serve_lifecycle_loop
     _startup_tasks.append(asyncio.create_task(cookbook_serve_lifecycle_loop()))
 
+    # FreeToken (local MoE OpenAI-compatible server, normally on the host at
+    # :7090) auto-registers as a model endpoint on every boot, the same way
+    # Cookbook auto-registers a server it just launched
+    # (routes/cookbook_routes.py `_auto_register_llm_endpoint`) — except
+    # FreeToken is an always-on external service Odysseus never launches
+    # itself, so there is no serve command to hook. Probing/registering is
+    # best-effort and silent: if FreeToken is not running, this is a no-op
+    # that costs one short connect timeout and never blocks startup. Disable
+    # with ODYSSEUS_FREETOKEN_ENDPOINT=0; override host/port/URL with
+    # FREETOKEN_BASE_URL (full ``.../v1`` base) or FREETOKEN_PORT.
+    _freetoken_enabled = str(os.getenv("ODYSSEUS_FREETOKEN_ENDPOINT", "1")).strip().lower() not in {"0", "false", "no", "off"}
+    if _freetoken_enabled:
+        async def _seed_freetoken_endpoint():
+            try:
+                import uuid as _uuid
+                import json as _json
+                from core.database import SessionLocal, ModelEndpoint
+                from routes.model_routes import _probe_endpoint, _docker_host_gateway_reachable
+
+                explicit_base = (os.getenv("FREETOKEN_BASE_URL") or "").strip().rstrip("/")
+                if explicit_base:
+                    base_url = explicit_base
+                else:
+                    port = os.getenv("FREETOKEN_PORT", "7090").strip() or "7090"
+                    in_docker = await asyncio.to_thread(_docker_host_gateway_reachable)
+                    host = "host.docker.internal" if in_docker else "127.0.0.1"
+                    base_url = f"http://{host}:{port}/v1"
+
+                models = await asyncio.to_thread(_probe_endpoint, base_url, None, 5)
+
+                db = SessionLocal()
+                try:
+                    existing = (
+                        db.query(ModelEndpoint)
+                        .filter(ModelEndpoint.base_url == base_url)
+                        .first()
+                    )
+                    if existing:
+                        if models:
+                            existing.is_enabled = True
+                            existing.cached_models = _json.dumps(models)
+                            db.commit()
+                            logger.info(f"FreeToken endpoint refreshed: {base_url} ({len(models)} model(s))")
+                        return
+                    if not models:
+                        logger.info(f"FreeToken not reachable at {base_url}; skipping auto-seed for now")
+                        return
+                    ep = ModelEndpoint(
+                        id=f"freetoken-{_uuid.uuid4().hex[:8]}",
+                        name="FreeToken",
+                        base_url=base_url,
+                        api_key=None,
+                        is_enabled=True,
+                        model_type="llm",
+                        endpoint_kind="local",
+                        model_refresh_mode="auto",
+                        cached_models=_json.dumps(models),
+                    )
+                    db.add(ep)
+                    db.commit()
+                    logger.info(f"Auto-registered FreeToken endpoint: {base_url} ({len(models)} model(s))")
+                finally:
+                    db.close()
+            except Exception as e:
+                logger.warning(f"FreeToken endpoint auto-seed failed (non-critical): {e}")
+
+        _startup_tasks.append(asyncio.create_task(_seed_freetoken_endpoint()))
+
     logger.info("Application startup complete")
 
 async def _shutdown_event():
