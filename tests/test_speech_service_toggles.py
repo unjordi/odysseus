@@ -55,3 +55,38 @@ def test_stt_disabled_toggle_blocks_transcription(monkeypatch):
     assert service.available is False
     assert service.transcribe(b"audio") is None
     assert calls == {"endpoint": 0, "whisper": 0}
+
+
+def test_stt_preload_only_loads_for_local_provider(monkeypatch):
+    """preload() (called from app startup to warm the model before the
+    first real request) must be a no-op unless STT is enabled AND the
+    provider is "local" — the API/browser providers have nothing to load."""
+    service = STTService()
+    calls = {"whisper": 0}
+
+    def fake_whisper():
+        calls["whisper"] += 1
+        return object()
+
+    monkeypatch.setattr(service, "_get_whisper", fake_whisper)
+
+    # disabled -> no-op
+    monkeypatch.setattr(service, "_load_settings", lambda: {
+        "stt_enabled": False, "stt_provider": "local", "stt_model": "base", "stt_language": "",
+    })
+    assert service.preload() is False
+    assert calls["whisper"] == 0
+
+    # enabled but non-local provider -> no-op
+    monkeypatch.setattr(service, "_load_settings", lambda: {
+        "stt_enabled": True, "stt_provider": "endpoint:x", "stt_model": "whisper-1", "stt_language": "",
+    })
+    assert service.preload() is False
+    assert calls["whisper"] == 0
+
+    # enabled + local -> loads the model
+    monkeypatch.setattr(service, "_load_settings", lambda: {
+        "stt_enabled": True, "stt_provider": "local", "stt_model": "base", "stt_language": "",
+    })
+    assert service.preload() is True
+    assert calls["whisper"] == 1

@@ -3,6 +3,7 @@
 
 import io
 import logging
+import os
 import httpx
 import tempfile
 from pathlib import Path
@@ -80,12 +81,50 @@ class STTService:
                     use_cuda = False
                 device = "cuda" if use_cuda else "cpu"
                 compute_type = "float16" if device == "cuda" else "int8"
-                self._whisper_model = WhisperModel(model_size, device=device, compute_type=compute_type)
-                logger.info(f"faster-whisper model '{model_size}' loaded on {device}")
+                # CTranslate2's own intra-op thread pool (NOT the same knob as
+                # torch/OMP — CTranslate2 ignores OMP_NUM_THREADS for its own
+                # ops). 0 = CTranslate2 auto-picks (usually all cores), which
+                # can starve the FastAPI event loop / other CPU work in this
+                # same process (Kokoro's in-process pipeline, DB, etc). Pin it
+                # explicitly so a transcribe() call stays fast without
+                # hogging every core. Override with ODYSSEUS_STT_CPU_THREADS.
+                cpu_threads = int(os.getenv("ODYSSEUS_STT_CPU_THREADS", "4"))
+                self._whisper_model = WhisperModel(
+                    model_size,
+                    device=device,
+                    compute_type=compute_type,
+                    cpu_threads=cpu_threads if device == "cpu" else 0,
+                    num_workers=1,
+                )
+                logger.info(
+                    f"faster-whisper model '{model_size}' loaded on {device} "
+                    f"(cpu_threads={cpu_threads if device == 'cpu' else 'n/a'})"
+                )
             except Exception as e:
                 logger.error(f"Failed to load whisper model: {e}")
                 return None
         return self._whisper_model
+
+    def preload(self) -> bool:
+        """Eagerly load (and keep resident) the local Whisper model.
+
+        Called once from app startup so the model is already warm in RAM
+        before the first real /api/stt/transcribe request — without this,
+        the model loads lazily on that first request, adding several
+        seconds of cold-start latency to whatever the user was doing at
+        that moment. A no-op (returns False) unless STT is enabled AND the
+        provider is "local" — the API/browser providers have nothing to
+        preload. Safe to call from a background thread (blocking I/O +
+        CPU work, same as the lazy path it replaces); once loaded, the
+        model stays resident in this singleton instance (module-level
+        `_stt_service`) for the life of the process — no repeated loads.
+        """
+        settings = self._load_settings()
+        if settings.get("stt_enabled") is False:
+            return False
+        if settings.get("stt_provider") != "local":
+            return False
+        return self._get_whisper() is not None
 
     def _transcribe_local(self, audio_bytes: bytes, language: str = "") -> Optional[str]:
         model = self._get_whisper()

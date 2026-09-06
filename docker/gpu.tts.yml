@@ -44,6 +44,19 @@ services:
     environment:
       # Kokoro-FastAPI reads its model/voices from its own bundled cache.
       - USE_GPU=false
+      # CPU threading. Verified against remsky/Kokoro-FastAPI upstream
+      # (docker/cpu/Dockerfile.optimized + api/src/core/config.py, checked
+      # 2026-09): the image does NOT expose its own ONNX/thread-count knobs —
+      # no ONNX_NUM_THREADS or similar is read by the app. What actually
+      # governs its CPU math is the underlying torch/BLAS thread pool, which
+      # DOES read these standard env vars at process start. Setting them
+      # keeps inference from either (a) defaulting to every host core (noisy
+      # neighbor to Odysseus' own container) or (b) defaulting to 1 (needless
+      # latency) — tune via KOKORO_CPU_THREADS to match the cores you want to
+      # dedicate to TTS.
+      - OMP_NUM_THREADS=${KOKORO_CPU_THREADS:-4}
+      - MKL_NUM_THREADS=${KOKORO_CPU_THREADS:-4}
+      - OPENBLAS_NUM_THREADS=${KOKORO_CPU_THREADS:-4}
     volumes:
       # Persist the downloaded Kokoro weights (~330 MB) across recreates.
       # NAMED volume (not a host bind mount): un bind-mount lo crea docker como
@@ -51,10 +64,36 @@ services:
       # download del modelo revienta con PermissionError [Errno 13] en
       # api/src/models/v1_0. El volumen nombrado hereda el ownership del
       # directorio del image en el primer mount → appuser escribe sin choque de UID.
+      #
+      # DECISIÓN tmpfs-vs-persistente (evaluada, NO cambiada — 2026-09):
+      # Kokoro-FastAPI ya hace `initialize_with_warmup()` en su lifespan de
+      # arranque (verificado en api/src/main.py upstream) — carga los pesos a
+      # RAM del PROCESO en el startup del contenedor, sin importar de qué medio
+      # los leyó. Eso significa que la "fluidez" (nada de disco en cada
+      # request) ya está resuelta por el propio Kokoro; el named volume solo
+      # decide qué tan rápido es ESE único read de arranque. tmpfs ganaría
+      # unos ms/segundos de ese read único, a cambio de: (1) perder los ~330MB
+      # en cada recreate → re-descarga de HuggingFace (dependencia de red que
+      # hoy NO existe) en cada `docker compose up` tras un `down`/rebuild, y
+      # (2) reservar esa RAM el 100% del tiempo (incluso con TTS idle) en vez
+      # de dejar que sea page-cache reclamable. Con un modelo de 330MB en un
+      # volumen local (SSD/NVMe), ese read de arranque ya es sub-segundo — el
+      # trade-off no vale la pérdida de persistencia. Se CONSERVA el volumen
+      # nombrado. Si unjordi prefiere tmpfs de todos modos (p.ej. host con red
+      # muy rápida a HF y RAM sobrada), es un cambio de una línea:
+      #   tmpfs: [/app/api/src/models]   # reemplaza el volumes: de abajo
       - tts_models:/app/api/src/models
     # (GPU reservation OMITIDA — imagen CPU. Si vuelves a la imagen GPU en una
     #  arquitectura soportada, re-añade:
     #    deploy: { resources: { reservations: { devices: [{driver: nvidia, count: 1, capabilities: [gpu]}] } } })
+    # Memoria: reserva/tope explícitos para que el OS no swappee el proceso ya
+    # calentado (el warmup deja los pesos + working set en RAM; sin esto, bajo
+    # presión de memoria del host, el kernel puede paginarlo y el próximo
+    # request paga esa latencia). ~1-2GB es margen cómodo para Kokoro-82M
+    # (pesos ~330MB + runtime PyTorch CPU + buffers de audio). Ajusta si tu
+    # host anda muy justo de RAM.
+    mem_limit: 2g
+    mem_reservation: 512m
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; urllib.request.urlopen('http://localhost:8880/health', timeout=5)"]
       interval: 30s
