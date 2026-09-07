@@ -1,0 +1,41 @@
+# docker/axon.ollama.yml — LA ARISTA axon → ollama, en un archivo propio.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# POR QUÉ UN ARCHIVO SOLO PARA UNA ARISTA (no es ceremonia: es lo único que valida en los 4 modos)
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# `levantar-stack.sh` tiene dos interruptores independientes, `--sin-axon` y `--sin-ollama`, o sea CUATRO
+# combinaciones. Un `depends_on` entre dos servicios opcionales no puede vivir en el overlay de NINGUNO
+# de los dos:
+#   • en docker/axon.yml   → con `--sin-ollama` queda un depends_on a un servicio inexistente;
+#   • en docker/ollama.yml → con `--sin-axon` queda un servicio `axon` sin `image:` ni `build:`
+#     ⇒ "service axon has neither an image nor a build context specified: invalid compose project"
+#     (comprobado con `docker compose config`, no supuesto).
+# Vive en un tercer archivo que levantar-stack.sh añade SOLO cuando los dos están encendidos. Así la
+# arista aparece exactamente cuando sus dos extremos existen, y las cuatro combinaciones validan.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# POR QUÉ ES `service_healthy` Y NO `service_started` — el precio, dicho en voz alta
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# docker/axon.yml pinea el cerebro con `--model ${AXON_BRAIN_MODEL:-qwen3.8:27b}`, y axon con `--model`
+# EXPLÍCITO no consulta capacidades para elegir: en `buildSession` (src/cli.ts), si `opts.model` viene
+# dado, `hasLocal = true` sin preguntarle nada a Ollama. Consecuencia: sin este gate axon arranca
+# anunciando un cerebro que quizá no está — y el fallo no aparece en el arranque, aparece en el primer
+# chat del usuario. El gate mueve ese fallo al `up`, que es donde se puede ver y arreglar.
+#
+# Y `healthy` aquí significa lo que significa en docker/ollama.yml: **que Ollama VE los modelos**, no que
+# el puerto contesta. Es la mitad que hace útil la arista: esperar a un Ollama con la lista vacía sería
+# esperar a nada.
+#
+# PRECIO ACEPTADO: si Ollama nunca sana, axon NO arranca ⇒ no hay main car en :7001. NO se cae la app:
+# Odysseus sigue sirviendo en :7000. Se cae la PUERTA, no la casa. Y la salida documentada no es aflojar
+# el gate, es `./levantar-stack.sh --sin-ollama` (axon sale al Ollama nativo del host por
+# host.docker.internal, y este archivo ni siquiera entra al -f).
+#
+# ⚠️ `depends_on` solo ordena el ARRANQUE. Si Ollama enferma DESPUÉS, axon no se reinicia solo — se
+#    entera por request y degrada como siempre. Eso es correcto: reiniciar la puerta porque el motor
+#    tosió sería peor que servir un error claro.
+services:
+  axon:
+    depends_on:
+      ollama:
+        condition: service_healthy

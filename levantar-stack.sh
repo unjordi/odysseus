@@ -35,6 +35,10 @@ done
 FILES=(-f docker-compose.gpu-nvidia.yml -f docker/gpu.tts.yml)
 [ "$CON_OLLAMA" = 1 ] && FILES+=(-f docker/ollama.yml)
 [ "$CON_AXON"   = 1 ] && FILES+=(-f docker/axon.yml)
+# La arista `axon depends_on ollama (healthy)` solo tiene sentido si los DOS están en el -f. Vive en su
+# propio archivo justamente por esto: metida en cualquiera de los dos overlays, la otra combinación deja
+# un compose INVÁLIDO (un depends_on a un servicio que no existe, o un `axon:` sin image ni build).
+[ "$CON_AXON" = 1 ] && [ "$CON_OLLAMA" = 1 ] && FILES+=(-f docker/axon.ollama.yml)
 
 # Sin el overlay de ollama NO existe el host `ollama` en la red: axon tiene que salir por el host o se
 # queda sin motor. Se fija aquí (no en el .env) para que la variable siga al modo de arranque, no al revés.
@@ -107,7 +111,106 @@ echo "═══ 2/2 · up del stack (proyecto 'odysseus') ═══"
 # quieres podar, mira primero `docker ps -a --filter label=com.docker.compose.project=odysseus`.
 docker compose "${FILES[@]}" -p odysseus up -d ${BUILD_ARG}
 
+# ── 3/3 · REPORTE DE SALUD. El `up -d` vuelve en cuanto los contenedores están CREADOS, no cuando los
+#    servicios sirven: sin esto el script terminaba con un "✅ stack arriba" que solo probaba que docker
+#    aceptó el comando, y dejaba al humano haciendo `docker ps` a ver qué pasó. Aquí se espera de verdad
+#    y se DICE el estado de cada quien.
 echo
-echo "✅ stack arriba. Qué está sirviendo axon:"
-echo "   curl -sk https://127.0.0.1:7001/api/axon/version"
-echo "   (compáralo con: git -C $AXON_REPO rev-parse --short origin/develop)"
+echo "═══ 3/3 · esperando a que cada servicio esté SANO ═══"
+
+# Espera a que ningún servicio con healthcheck siga en `starting`. El tope sale de los start_period
+# declarados (el mayor es 90 s, el del TTS en su primer boot) + margen para las cadenas de depends_on.
+ESPERA_MAX="${ESPERA_MAX:-180}"
+t0=$SECONDS
+while :; do
+  # `--format json` da una línea JSON por servicio. Health vacío = servicio sin healthcheck declarado.
+  pendientes="$(docker compose "${FILES[@]}" -p odysseus ps --format json 2>/dev/null \
+    | grep -c '"Health":"starting"' || true)"
+  [ "${pendientes:-0}" -eq 0 ] && break
+  if [ $((SECONDS - t0)) -ge "$ESPERA_MAX" ]; then
+    aviso "se acabaron los ${ESPERA_MAX}s de espera con $pendientes servicio(s) todavía en 'starting' — reporto lo que hay"
+    break
+  fi
+  sleep 3
+done
+
+echo
+printf '%-12s %-10s %s\n' "SERVICIO" "SALUD" "QUÉ SIGNIFICA / DÓNDE MIRAR"
+printf '%-12s %-10s %s\n' "────────" "─────" "───────────────────────────"
+malos=0
+# El `ps` se lee UNA vez y se recorre: dos llamadas podrían ver estados distintos y reportar algo que
+# nunca existió a la vez.
+snapshot="$(docker compose "${FILES[@]}" -p odysseus ps --format '{{.Service}}\t{{.State}}\t{{.Health}}' 2>/dev/null || true)"
+while IFS=$'\t' read -r svc estado salud; do
+  [ -n "$svc" ] || continue
+  case "$salud" in
+    healthy)  icono="✅"; nota="sano" ;;
+    starting) icono="⏳"; nota="todavía arrancando (mira: docker compose -p odysseus logs $svc)"; malos=$((malos+1)) ;;
+    unhealthy) icono="❌"; nota="ENFERMO → docker compose -p odysseus logs $svc"; malos=$((malos+1)) ;;
+    # Sin healthcheck declarado: se dice, no se disfraza de sano. Hoy no debería salir ninguno —
+    # los siete servicios tienen el suyo — así que si aparece uno, es que se agregó un servicio y se
+    # olvidó su healthcheck.
+    ""|*)     if [ "$estado" = "running" ]; then icono="➖"; nota="corriendo, SIN healthcheck declarado (${salud:-sin salud})";
+              else icono="❌"; nota="estado=$estado"; malos=$((malos+1)); fi ;;
+  esac
+  printf '%-12s %-10s %s %s\n' "$svc" "${salud:-—}" "$icono" "$nota"
+done <<< "$snapshot"
+
+# ── Los dos chequeos CAROS que un healthcheck no debe hacer cada `interval`, hechos UNA vez ──────────
+# Un healthcheck corre para siempre: no puede sintetizar audio ni salir a buscar en internet. Pero esas
+# son justo las dos cosas que distinguen "el contenedor está arriba" de "el servicio SIRVE". Aquí, una
+# sola vez por despliegue, sí se pueden pagar.
+echo
+echo "── verificaciones de una sola vez (demasiado caras para un healthcheck) ──"
+
+# TTS: SÍNTESIS REAL. Es lo único que distingue un Kokoro sano de uno que arrancó, lista sus voces y
+# revienta en cada inferencia — el fallo de Blackwell (sm_120) que documenta docker/gpu.tts.yml.
+if docker compose "${FILES[@]}" -p odysseus ps --status running --services 2>/dev/null | grep -qx tts; then
+  if docker compose "${FILES[@]}" -p odysseus exec -T tts python -c \
+       "import urllib.request,json,sys; r=urllib.request.urlopen(urllib.request.Request('http://localhost:8880/v1/audio/speech',data=json.dumps({'model':'kokoro','input':'hola','voice':'ef_dora','response_format':'mp3'}).encode(),headers={'Content-Type':'application/json'}),timeout=60); d=r.read(); sys.exit(0 if len(d)>1000 else 1)" >/dev/null 2>&1; then
+    echo "✅ tts      · sintetiza audio de verdad (no solo lista voces)"
+  else
+    echo "❌ tts      · el contenedor está arriba pero NO SINTETIZA. Si cambiaste a la imagen GPU, es"
+    echo "             probablemente el fallo sm_120 ('no kernel image available') que documenta"
+    echo "             docker/gpu.tts.yml → vuelve a KOKORO_TTS_IMAGE=…kokoro-fastapi-cpu:v0.2.4"
+    malos=$((malos+1))
+  fi
+fi
+
+# searxng: BÚSQUEDA JSON REAL. Su healthcheck comprueba que arrancó y parseó settings.yml (su modo de
+# fallo documentado), pero no que devuelve JSON — y JSON es la única forma en que Odysseus lo consume.
+# No puede ir en el healthcheck: cada consulta sale a los motores upstream de verdad.
+if docker compose "${FILES[@]}" -p odysseus ps --status running --services 2>/dev/null | grep -qx searxng; then
+  if docker compose "${FILES[@]}" -p odysseus exec -T searxng python -c \
+       "import urllib.request,json,sys; d=json.load(urllib.request.urlopen('http://localhost:8080/search?q=odysseus&format=json',timeout=25)); sys.exit(0 if 'results' in d else 1)" >/dev/null 2>&1; then
+    echo "✅ searxng  · devuelve resultados en JSON (que es como Odysseus lo consume)"
+  else
+    echo "⚠  searxng  · sano para el healthcheck pero la búsqueda JSON no respondió. Puede ser red o"
+    echo "             el formato 'json' deshabilitado en settings.yml → config/searxng/settings.yml"
+  fi
+fi
+
+# ── El chequeo de drift: qué commit sirve axon vs. qué está integrado ────────────────────────────────
+if [ "$CON_AXON" = 1 ]; then
+  echo
+  sirviendo="$(curl -sk --max-time 10 https://127.0.0.1:${AXON_SERVE_PORT:-7001}/api/axon/version 2>/dev/null \
+    | sed -n 's/.*"commit_corto":"\([^"]*\)".*/\1/p')"
+  integrado="$(git -C "$AXON_REPO" rev-parse --short origin/develop 2>/dev/null || echo '?')"
+  if [ -z "$sirviendo" ]; then
+    echo "❌ axon     · no pude leer /api/axon/version (¿TLS? ¿todavía arrancando?)"
+    malos=$((malos+1))
+  elif [ "$sirviendo" = "$integrado" ]; then
+    echo "✅ axon     · sirviendo ${sirviendo} = origin/develop. Sin drift."
+  else
+    echo "❌ axon     · DRIFT: sirviendo ${sirviendo}, integrado ${integrado}. Vuelve a correr este script."
+    malos=$((malos+1))
+  fi
+fi
+
+echo
+if [ "$malos" -eq 0 ]; then
+  echo "✅ stack arriba y sano. Abre:  https://127.0.0.1:${AXON_SERVE_PORT:-7001}"
+else
+  echo "⚠  stack arriba con $malos punto(s) a revisar (arriba dice cuál y dónde mirar)."
+  echo "   Nada se declara LISTO hasta que eso esté en verde y lo veas tú."
+fi

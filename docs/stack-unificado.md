@@ -26,9 +26,11 @@ principio se extiende a todo lo que corría nativo: **lo que vive fuera del stac
 | `ollama` | motor de inferencia | `docker/ollama.yml` — **antes nativo** |
 | `axon` | main car (puerta + cerebro) | `docker/axon.yml` — **antes nativo** |
 
-Los cuatro archivos: `docker-compose.gpu-nvidia.yml` + `docker/gpu.tts.yml` + `docker/ollama.yml` +
-`docker/axon.yml`, siempre con `-p odysseus` (el nombre del proyecto es lo que ata los volúmenes
-`odysseus_*` existentes: cambiarlo estrenaría volúmenes vacíos).
+Los archivos del `-f`: `docker-compose.gpu-nvidia.yml` + `docker/gpu.tts.yml` + `docker/ollama.yml` +
+`docker/axon.yml` + `docker/axon.ollama.yml` (este último SOLO cuando axon y ollama están los dos —
+lleva únicamente la arista `axon depends_on ollama`; el porqué está en § Orden de arranque). Siempre con
+`-p odysseus` (el nombre del proyecto es lo que ata los volúmenes `odysseus_*` existentes: cambiarlo
+estrenaría volúmenes vacíos).
 
 ## El candado anti-drift: axon **dice qué commit sirve**
 
@@ -61,6 +63,136 @@ Si difieren, `./levantar-stack.sh` los iguala. Antes de esto, esa pregunta no te
 - **axon → host** (broker de terminal `:8799`, FreeToken `:7090`): `host.docker.internal:host-gateway`.
 - El puerto **11434 se sigue publicando en el host** con el mismo bind `0.0.0.0` → todo lo que hoy habla
   con `localhost:11434` (el CLI `ollama`, axon nativo, scripts sueltos) sigue funcionando sin cambios.
+
+## Orden de arranque y salud: qué significa **listo** para cada quien
+
+> Un `docker compose up -d` vuelve cuando los contenedores están **creados**, no cuando los servicios
+> **sirven**. Todo lo de esta sección existe para cerrar esa brecha: que el stack levante en orden, que
+> cada servicio declare su propia condición de estar listo, y que `levantar-stack.sh` lo **diga** en vez
+> de dejarte haciendo `docker ps`.
+
+La regla que gobierna todo lo de abajo: **`healthy` significa algo distinto en cada servicio.** No hay un
+`curl -f /` repetido siete veces. Tres de los siete tienen un modo de fallo en el que el contenedor está
+perfectamente arriba y el servicio no sirve — y el healthcheck de cada uno está escrito para esos casos.
+
+### La tabla: qué comprueba cada uno y por qué
+
+| servicio | "listo" significa | comando | por qué ESE y no otro |
+|---|---|---|---|
+| `odysseus` | **uvicorn acepta requests** | `curl -fsS /api/health` | `GET /` da **302** al login (verificado) → exigir 200 lo dejaría enfermo para siempre. `/api/health` está en `AUTH_EXEMPT_EXACT` (app.py) → 200 sin sesión, y solo devuelve un dict con timestamp: cero I/O |
+| `axon` | **el server responde y dice qué commit sirve** | `GET https://…:7001/api/axon/version` | sin auth a propósito (el handler lo dice: "es el endpoint que consulta el HEALTHCHECK"), va antes del proxy, no toca el modelo. **`https`, no `http`** — ver abajo |
+| `ollama` | **VE los modelos** | `ollama list \| tail -n +2 \| grep -q .` | `ollama list` a secas sale con 0 **aunque la lista esté vacía** — y la lista vacía (si `OLLAMA_MODELS` no toma) es el fallo real: un stack roto que parece sano |
+| `searxng` | **arrancó y parseó su `settings.yml`** | `GET /` (sin cambios) | su fallo documentado es *crashear al boot* (`KeyError: 'default_doi_resolver'`, tag 2026.6.2). Ya estaba bien tuneado; no se toca por tocarlo |
+| `chromadb` | **su heartbeat contesta** | `bash -c` + `/dev/tcp` → `/api/v2/heartbeat` | la imagen **no trae curl, wget, nc ni python** (verificado adentro): solo bash. Y `/dev/tcp` es de **bash**, no de sh — el `sh` de esa imagen es dash y falla → por eso `["CMD","bash",…]`, nunca `CMD-SHELL` |
+| `ntfy` | **su `/v1/health` dice `healthy:true`** | `wget … \| grep -q '"healthy":true'` | se comprueba el **contenido**, no el 200: ntfy responde 200 a rutas que no prueban nada. Imagen busybox → wget, no curl |
+| `tts` | **el paquete de voces cargó** | `GET /v1/audio/voices` **y la lista no vacía** | `/health` solo dice que FastAPI contesta; un Kokoro sin voces es un TTS mudo que se ve sano. 785 B, 13 ms, sin síntesis |
+
+**Los tres "arriba pero inútil"** que estos healthchecks atrapan y un `curl /` no: Ollama con **0 modelos**,
+Kokoro **sin voces**, y ntfy respondiendo 200 **sin estar sano**.
+
+### El bug que esto destapó: el healthcheck de axon nunca habría pasado
+
+El `command:` de `docker/axon.yml` pasa `--tls-cert/--tls-key`. Con TLS, `createChatServer` devuelve un
+`createHttpsServer` **en lugar del** `http.createServer` (`src/server/http-server.ts:1229-1245`): hay **un
+solo listener** en `:7001` y habla TLS. El healthcheck que había hacía un `GET` en **http plano** contra él
+→ jamás 200 → `unhealthy` **para siempre**. No lo delataba nadie porque, con el grafo anterior, nada
+dependía de axon.
+
+Corregido a `https` con `rejectUnauthorized:false` — que aquí no afloja nada: el cert es el wildcard
+`*.pisa.mx` y el probe pega a `127.0.0.1`, así que la validación fallaría por el **nombre**, no por
+confianza; es un probe local contra el propio proceso, dentro del contenedor.
+
+> **Regla que queda escrita en el archivo:** el `--tls-cert/--tls-key` del `command:` y el esquema del
+> `test:` son **la misma decisión**. Si un día se quita el TLS, se cambia `https` por `http` ahí mismo.
+
+### El grafo de dependencias, arista por arista
+
+```
+  searxng ──(healthy)──┐
+                       ├──▶  odysseus ──(healthy)──┐
+  chromadb ─(started)──┤                           ├──▶  axon
+                       │                           │
+  ollama ───(started)──┘        ollama ──(healthy)─┘
+
+  tts   ·  ntfy   →  SIN aristas (nadie los espera, nadie se cae por ellos)
+```
+
+| arista | condición | por qué |
+|---|---|---|
+| `odysseus` → `searxng` | **healthy** | *(pre-existente, se conserva)* la búsqueda es de primera clase y searxng tiene un fallo de *crash al boot*; "arriba" no lo distingue de "sirviendo". Precio aceptado y deliberado: un searxng que no sana bloquea la app |
+| `odysseus` → `chromadb` | **started** | tentador subirlo a `healthy` ahora que chromadb tiene healthcheck, y sería un **`depends_on` de más**: `src/rag_singleton.py` es lazy **con reintento** → la carrera **se cura sola**. `healthy` cambiaría un degradado temporal por un SPOF (chroma enfermo ⇒ ni correo ni tareas ni galería) |
+| `odysseus` → `ollama` | **started** *(bajado de `healthy`)* | Odysseus consulta Ollama **perezosamente, por request**; no hay one-shot de arranque que perder. Sus propios logs muestran el degradado limpio (`Failed to probe …: Connection refused` y sigue arrancando). `healthy` habría hecho del motor de inferencia un SPOF de **toda** la app |
+| `axon` → `odysseus` | **healthy** *(subido de `started`)* | el impedimento de antes ("odysseus no tiene healthcheck") **ya no existe**. axon es la **puerta**: todo lo que no es `/api/chat_stream` se proxea. Arrancar antes ⇒ el primer page-load da **502**. Cuesta ~4 s medidos, una vez |
+| `axon` → `ollama` | **healthy** | `docker/axon.yml` **pinea** `--model qwen3.8:27b`, y con `--model` explícito `buildSession` pone `hasLocal = true` **sin preguntarle a Ollama** → sin el gate, axon arranca anunciando un cerebro que quizá no está, y el fallo aparece en el primer chat del usuario, no en el `up` |
+| `tts`, `ntfy` | **ninguna** | son opcionales de verdad. Un `depends_on` aquí convertiría "no hay read-aloud" en "el stack no levanta". Su healthcheck existe para que `docker compose ps` diga la verdad, no para bloquear a nadie |
+
+**Dónde vive la arista `axon → ollama`, y por qué importa.** En su propio archivo,
+**`docker/axon.ollama.yml`**. `levantar-stack.sh` tiene dos interruptores independientes (`--sin-axon`,
+`--sin-ollama`) ⇒ cuatro combinaciones, y un `depends_on` entre dos servicios opcionales no puede vivir en
+el overlay de ninguno de los dos: en `axon.yml` deja un `depends_on` a un servicio inexistente con
+`--sin-ollama`; en `ollama.yml` deja un `axon:` sin `image:` ni `build:` con `--sin-axon` →
+*"service axon has neither an image nor a build context specified"*. **Comprobado con `docker compose
+config`, no supuesto.** En su tercer archivo, la arista aparece exactamente cuando existen sus dos
+extremos, y **las cuatro combinaciones validan**.
+
+### `start_period`: de dónde sale cada número
+
+`start_period` es la perilla que evita marcar enfermo a un servicio que **todavía está naciendo**. Vale la
+pena entender su mecánica antes de discutir cifras: durante el `start_period` los fallos **no cuentan**
+contra `retries`, y el **primer probe exitoso lo termina de inmediato y marca `healthy`**. ⇒ **un
+`start_period` generoso no cuesta nada cuando el arranque es rápido.** Por eso el criterio no es "el
+promedio", es *"¿cuánto puede tardar un arranque lento pero NORMAL?"*.
+
+| servicio | valor | de dónde |
+|---|---|---|
+| `odysseus` | **60 s** | **MEDIDO**: contenedor `18:50:22.709` → `Uvicorn running on http://0.0.0.0:7000` `18:50:26.202` = **3.5 s** en caliente. Los 60 s cubren el arranque **frío** (imagen recién construida, page cache vacío, FastEmbed, round-trips a chromadb) |
+| `tts` | **90 s** *(sin cambio)* | el **primer** boot descarga ~330 MB de pesos desde HuggingFace. Después el volumen `tts_models` los tiene y es lectura local. El contenedor vivo está `healthy` con esta misma cifra |
+| `axon` | **45 s** *(de 20)* | antes de `server.listen`, `buildSession` consulta capacidades por HTTP contra Ollama, abre la SQLite de Odysseus y lee cert+key. 20 s dejaba poco aire para eso más un arranque frío de Node. **No medido** |
+| `ollama` | **40 s** *(de 20)* | el nativo contesta `/api/tags` en **5 ms**, pero es un daemon caliente. El contenedor paga init del runtime CUDA sobre **dos** GPUs (`count: all`) y el primer recorrido de manifests de un store de 34 GB. **No medido en contenedor** |
+| `chromadb` | **30 s** | **no medido** (no se reinició nada). Chroma arranca en segundos; 30 s es margen honesto para un cold start con el sqlite poblado |
+| `ntfy` | **10 s** | binario Go que sirve casi de inmediato, y no gatea a nadie |
+| `searxng` | **10 s** *(sin cambio)* | ya estaba tuneado para su fallo de boot (`retries: 20` a 5 s = 100 s de gracia). No se toca |
+
+**`interval`, con el mismo criterio.** No es "cada cuánto molesto", es *"¿cuánta latencia de detección me
+cuesta?"*. Los que **gatean** a alguien (`searxng`, `chromadb`, `ollama`, `odysseus`) van a **5 s**: cada
+segundo de detección es un segundo de arranque del stack, y sus probes cuestan milisegundos. Los que **no
+gatean a nadie** (`axon`, `tts`, `ntfy`) van a **30 s**: su salud es informativa.
+
+### Ningún healthcheck cuesta caro — y qué se hace con lo que sí
+
+Un healthcheck corre **cada `interval`, para siempre**. Ninguno de los siete carga un modelo, hace
+inferencia ni escribe:
+
+- `ollama list` pega a `GET /api/tags` (leer manifests). **Medido: 5 ms**, y `GET /api/ps` sigue en
+  `{"models":[]}` después ⇒ no calienta ni desaloja nada.
+- `tts` lista voces (785 B) en vez de sintetizar.
+- `odysseus` usa `/api/health`, que devuelve un dict con un timestamp.
+- `chromadb` abre un socket y lee la primera línea.
+
+**Los dos chequeos que sí son caros no desaparecen: se hacen UNA vez**, al final de `levantar-stack.sh`,
+que es el lugar correcto para un chequeo caro — una vez por despliegue, no cada 30 segundos:
+
+1. **TTS — síntesis real** de una palabra. Es lo **único** que distingue un Kokoro sano de uno que arrancó,
+   lista sus voces y **revienta en cada inferencia**: el fallo de Blackwell (`sm_120`, *"no kernel image is
+   available"*) que documenta `docker/gpu.tts.yml`. **El healthcheck no puede probar eso** — con la imagen
+   GPU en una GPU no soportada, `/health` y `/v1/audio/voices` pueden seguir contestando 200 mientras cada
+   síntesis falla. Aquí sí se prueba, y si falla el script dice exactamente cómo volver a la imagen CPU.
+2. **searxng — una búsqueda JSON real**. Su healthcheck prueba que arrancó y parseó `settings.yml`, pero no
+   que devuelve **JSON**, que es la única forma en que Odysseus lo consume. No puede ir en el healthcheck:
+   cada consulta sale a los motores upstream de verdad. *(Se evaluó `GET /config` como alternativa barata y
+   **no sirve**: verificado en vivo, no expone la clave `formats` — y son 98 KB.)*
+
+### `levantar-stack.sh` ahora reporta
+
+Al terminar el `up`, el script **espera** a que nadie siga en `starting` (tope `ESPERA_MAX`, 180 s por
+defecto, derivado del `start_period` mayor) y luego imprime una tabla `servicio · salud · qué significa /
+dónde mirar`, con el comando de logs ya escrito para el que esté mal. Después corre las dos verificaciones
+de una sola vez de arriba y el **chequeo de drift** (`/api/axon/version` contra
+`git rev-parse --short origin/develop`). Si algo quedó en rojo lo dice y **no** declara nada listo.
+
+Un servicio **sin** healthcheck declarado se reporta como `➖ corriendo, SIN healthcheck` — no se disfraza
+de sano. Hoy no debería salir ninguno (los siete tienen el suyo); si aparece uno, es que se agregó un
+servicio y se olvidó su healthcheck.
 
 ## Ollama: los pesos **no** se re-descargan
 
@@ -262,17 +394,79 @@ Los subagentes de axon hacen `git worktree add` (`src/agents/subagent.ts` → `s
   quedaría root-owned y **Odysseus** (que corre como `PUID/PGID`) fallaría al escribirlo después;
 - el worktree en sí se crea bajo `os.tmpdir()` → **dentro** del contenedor, efímero: aislamiento gratis.
 
+## Hallazgos abiertos (encontrados al diseñar los healthchecks — NO son parte de esta rebanada)
+
+Salieron de leer los servicios en vivo para escribir sus healthchecks. **No se arreglaron aquí**: uno exige
+recrear un contenedor (no se levantó nada) y el otro es un cambio en el código de Odysseus. Quedan escritos
+para que no se pierdan.
+
+### 🔴 ALTO — `chromadb` NO está persistiendo: el volumen está montado donde el proceso no escribe
+
+Verificado dentro del contenedor vivo:
+
+```
+volumen odysseus_chromadb-data  →  /chroma/chroma     ... VACÍO
+el proceso escribe en           →  /data              ... chroma.sqlite3 (1.1 MB) + 2 colecciones
+```
+
+El log de arranque de chroma lo dice él mismo: `Saving data to: /data` / `persist_path: "/data"`. La imagen
+`chromadb/chroma:latest` **cambió su ruta de persistencia** y el `volumes:` del compose se quedó en la vieja.
+⇒ **Todo el vector store (RAG + memorias) vive en la capa escribible del contenedor**: un
+`docker compose down` o cualquier recreate **lo borra**.
+
+- **Arreglo** (una línea): montar el volumen en `/data` — o fijar la ruta con la env var que corresponda a
+  la versión de la imagen.
+- **⚠️ No es un cambio inocente:** al remontar, el volumen `odysseus_chromadb-data` (vacío) taparía `/data`
+  y Chroma arrancaría **con una base vacía**. Los datos actuales hay que **copiarlos fuera primero**
+  (`docker cp odysseus-chromadb-1:/data …`) y sembrarlos en el volumen. Es rebanada propia, con respaldo.
+- Mitiga el susto, pero no lo arregla: `src/rag_singleton.py` re-crea las colecciones vacías al arrancar,
+  así que la pérdida se ve como *"el RAG se quedó sin documentos"*, no como un error.
+
+### 🟡 MEDIO — `/api/ready` existe, es la readiness que queríamos, y no se puede usar
+
+`GET /api/ready` (app.py:1002 → `src/readiness.py`) comprueba exactamente lo correcto (DB alcanzable, data
+dir presente y **escribible**) y devuelve 503 si algo falta — la semántica ideal de un readiness probe. No
+se usa como healthcheck por **dos** razones independientes:
+
+1. **Está detrás del middleware de auth**: devuelve **401** (verificado en vivo). No está en
+   `AUTH_EXEMPT_EXACT`, donde sí están `/api/health` y `/api/version`.
+2. **Escribe**: crea y borra un archivo probe en `DATA_DIR` en **cada** llamada (`readiness.py:39-42`). Un
+   healthcheck que corre cada `interval` para siempre no debe escribir.
+
+Para usarlo haría falta exentarlo de auth **y** darle un modo no-escribiente (p. ej. `os.access(W_OK)` en
+lugar del archivo). Mientras tanto el healthcheck es `/api/health` y la comprobación profunda no se hace.
+
 ## Lo que NO está verificado (porque no se levantó nada)
 
-Todo lo de abajo es diseño validado con `docker compose config`, `tsc` y las probes — **no** con el stack
-corriendo. Al primer `up`, mirar en este orden:
+Todo lo de abajo es diseño validado con `docker compose config`, `tsc`, las probes, y —lo nuevo de esta
+pasada— **ejecutando cada comando de healthcheck contra los contenedores que YA corrían** (`docker exec`,
+solo lectura). Lo que **no** se probó es un `up` completo: el orden de arranque real, los tiempos en frío y
+los servicios que hoy no están arriba.
 
-1. **axon como uid 1000** — es el cambio de mayor riesgo (antes corría como root). Si algo revienta será
-   un `EACCES` claro en `docker logs odysseus-axon-1`. Escape: quitar la línea `user:` de `docker/axon.yml`.
-2. **Ollama en contenedor lee el store** — `docker compose -p odysseus exec ollama ollama list` debe
-   devolver los 4 modelos. Si sale vacío, `OLLAMA_MODELS` no tomó.
-3. **Ollama ve las dos GPUs** — `docker compose -p odysseus exec ollama nvidia-smi -L`.
-4. **`git worktree add` desde el contenedor** — probar un `delegate` real; es lo que confirma que
-   `/workspace/.git` es escribible con ese uid.
-5. **Que `/api/axon/version` reporte el sha de develop**, no `desconocido`.
-6. **La terminal del widget** sigue dando shell del host (requiere `AXON_TERM_BROKER_TOKEN` en el `.env`).
+**Verificado en vivo** (comando de healthcheck ejecutado, `exit=0`): `odysseus` (`/api/health` 200 y `/` 302),
+`chromadb` (`bash`+`/dev/tcp` → heartbeat; y que su `sh` es dash y **no** sirve), `ntfy` (`healthy:true`),
+`tts` (voces no vacías), `searxng` (200), `ollama` (formato de `ollama list` contra el binario nativo, 5 ms,
+sin cargar modelos). Las **seis** combinaciones de overlays validan con `docker compose config`.
+
+**Sin verificar, en orden de riesgo — mirar esto al primer `up`:**
+
+1. **El healthcheck de `axon`.** Es el único que se **corrigió a ciegas** (de `http` a `https`): el
+   contenedor de axon no está corriendo, así que la corrección está probada por lectura del código
+   (`http-server.ts:1229-1245`: con TLS se devuelve un `createHttpsServer` en lugar del server plano), no
+   por ejecución. Si sale `unhealthy`, mirar primero si el `command:` sigue pasando `--tls-cert`.
+2. **`ollama` en contenedor ve los modelos** — es la premisa del healthcheck nuevo *y* de la arista dura
+   `axon → ollama`. Si `OLLAMA_MODELS` no toma, ahora el stack **se planta ahí a propósito** en vez de
+   arrancar un axon con un cerebro fantasma. Comprobar: `docker compose -p odysseus exec ollama ollama list`.
+3. **Los `start_period` no medidos** (`ollama` 40 s, `axon` 45 s, `chromadb` 30 s). Elegidos por el lado
+   seguro; no cuestan cuando el arranque es rápido. Ajustarlos **con evidencia** del primer `up` real:
+   `docker inspect <ctr> --format '{{.State.StartedAt}}'` contra la primera línea útil de `docker logs -t`.
+4. **El fallo de Blackwell del TTS** — el smoke de síntesis de `levantar-stack.sh` está escrito pero no
+   ejercitado contra la imagen **GPU** (el stack corre la CPU por default, y esa sí sintetiza hoy).
+5. **El reporte de salud de `levantar-stack.sh`** — `bash -n` limpio y los `docker compose ps --format`
+   son los documentados, pero la tabla no se ha impreso nunca de verdad.
+6. **axon como uid 1000** — sigue siendo el cambio de mayor riesgo (antes corría como root). Un `EACCES`
+   claro en `docker logs odysseus-axon-1`. Escape: quitar la línea `user:` de `docker/axon.yml`.
+7. **`git worktree add` desde el contenedor** — probar un `delegate` real; confirma que `/workspace/.git`
+   es escribible con ese uid.
+8. **Que `/api/axon/version` reporte el sha de develop**, no `desconocido` (ahora lo compara el script solo).
+9. **La terminal del widget** sigue dando shell del host (requiere `AXON_TERM_BROKER_TOKEN` en el `.env`).

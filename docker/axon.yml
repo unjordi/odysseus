@@ -39,13 +39,19 @@ services:
     # El nombre fijo `axon-maincar` era del `docker run` suelto de antes; conservarlo aquí CHOCARÍA con
     # ese contenedor viejo ("name is already in use") y volvería a esconder que ahora es parte del stack.
     depends_on:
-      # Sin Odysseus arriba, el main car proxea al vacío: todo lo que no sea /api/chat_stream daría 502.
-      # `service_started` y no `service_healthy` a propósito: el compose de Odysseus NO le declara
-      # healthcheck al servicio `odysseus` (lo tienen searxng y tts), así que exigir "healthy" colgaría
-      # el arranque para siempre. axon reintenta el proxy por request — un Odysseus que tarda unos
-      # segundos más en levantar no rompe nada.
+      # service_HEALTHY (subido desde `service_started`). El comentario anterior decía —con razón en su
+      # momento— que "el compose de Odysseus NO le declara healthcheck al servicio odysseus, así que
+      # exigir healthy colgaría el arranque para siempre". Ese impedimento YA NO EXISTE: odysseus tiene
+      # healthcheck propio (`GET /api/health`, en los tres docker-compose*.yml), y llega a healthy en
+      # ~4 s medidos. Sin el impedimento, `healthy` es lo correcto:
+      #   • axon es la PUERTA — todo lo que no sea /api/chat_stream se proxea a Odysseus. Arrancar antes
+      #     de que Odysseus acepte requests significa que el PRIMER page-load del navegador da 502; el
+      #     usuario ve una app rota y recarga. No es una carrera teórica: es la que se ve.
+      #   • el costo es ~4 s de espera, una vez, en el `up`.
+      # NO es un `depends_on` de más: axon SIN Odysseus no es un servicio degradado, es una puerta a un
+      # edificio vacío. La dependencia es real, así que se declara real.
       odysseus:
-        condition: service_started
+        condition: service_healthy
     # MAIN CAR: chat → cerebro de axon; TODO lo demás → proxy a Odysseus por el NOMBRE DE SERVICIO de la
     # red del compose. (El `docker run` que probó esto el 2026-09-02 usaba el nombre de CONTENEDOR
     # `odysseus-odysseus-1` porque venía de fuera del proyecto; adentro, `odysseus` es el alias estable
@@ -139,12 +145,35 @@ services:
       # (:7090) y —si se corre sin el overlay de ollama— el Ollama nativo (:11434).
       - "host.docker.internal:host-gateway"
     healthcheck:
-      # GET /api/axon/version: barato, sin auth, sin tocar el modelo — y de paso DICE QUÉ COMMIT SIRVE.
-      # `docker inspect`/`curl` de ese endpoint es el chequeo de drift mergeado↔desplegado (#26g).
-      # node built-in porque node:22-slim no trae curl/wget.
-      test: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:7001/api/axon/version',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      # QUÉ SIGNIFICA LISTO PARA AXON: que el servidor HTTP responde Y puede decir QUÉ COMMIT sirve.
+      # `GET /api/axon/version` es el probe: barato, sin auth (a propósito — ver el comentario del handler
+      # en src/server/http-server.ts: "es el endpoint que consulta el HEALTHCHECK del contenedor"), va
+      # ANTES del proxy (nunca cruza a Odysseus) y NO toca el modelo. Y de paso es el chequeo de drift
+      # mergeado↔desplegado (#26g). node built-in porque node:22-slim no trae curl/wget.
+      #
+      # ⚠️ **`https`, NO `http`** — esto era un bug que habría dejado a axon `unhealthy` PARA SIEMPRE.
+      # El `command:` de arriba pasa `--tls-cert/--tls-key`, y con TLS `createChatServer` devuelve un
+      # `createHttpsServer` en LUGAR del `http.createServer` (src/server/http-server.ts:1229-1245): hay
+      # UN solo listener en :7001 y habla TLS. Un GET en http plano contra él nunca da 200.
+      # `rejectUnauthorized:false` es obligatorio y no afloja nada: el cert es el wildcard `*.pisa.mx` y
+      # el probe pega a `127.0.0.1` — la IP no está en el SAN, así que la validación fallaría por el
+      # nombre, no por confianza. Es un probe local contra el propio proceso, dentro del contenedor.
+      # ⇒ REGLA: `--tls-cert/--tls-key` en `command:` y el esquema de este `test:` son LA MISMA decisión.
+      #   Si algún día quitas el TLS de ahí arriba, cambia también `https` por `http` aquí abajo.
+      #
+      # NO VERIFICADO EN VIVO: no se levantó el contenedor de axon en esta pasada. Lo comprobado es la
+      # ruta de código (TLS reemplaza el server plano) y que el endpoint existe y responde 200 sin auth.
+      test: ["CMD", "node", "-e", "require('https').get({host:'127.0.0.1',port:7001,path:'/api/axon/version',rejectUnauthorized:false},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      # interval 30s: NADIE depende de axon — es la hoja del grafo. Su salud es informativa (la mira el
+      # humano en `docker compose ps` y el reporte de levantar-stack.sh), no desbloquea a nadie.
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 20s
+      # 45 s (subido de 20). Antes de escuchar, `axon serve` hace un arranque con trabajo real:
+      # `buildSession` consulta capacidades locales por HTTP (`GET /api/tags` contra Ollama,
+      # src/capabilities.ts), abre la SQLite de Odysseus (`AXON_ODYSSEUS_DB`) y lee cert+key de TLS —
+      # todo ANTES del `server.listen`. 20 s dejaba poco aire para un arranque en frío del runtime de
+      # Node más esas tres cosas. NO MEDIDO (no se levantó): se elige por el lado seguro, y no cuesta —
+      # el primer probe exitoso cierra el start_period.
+      start_period: 45s
     restart: unless-stopped

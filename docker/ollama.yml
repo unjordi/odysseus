@@ -76,13 +76,36 @@ services:
               count: all
               capabilities: [gpu]
     healthcheck:
-      # La imagen ollama/ollama NO trae curl/wget (Ubuntu mínima, solo el binario `ollama`). `ollama list`
-      # pega al mismo GET /api/tags desde el CLI ya presente → gate de cold-start sin instalar nada.
-      test: ["CMD", "ollama", "list"]
-      interval: 10s
+      # QUÉ SIGNIFICA LISTO PARA OLLAMA AQUÍ: que **VE LOS MODELOS**, no que el puerto contesta.
+      #
+      # `ollama list` a secas (lo que había) sale con 0 aunque la lista esté VACÍA — y una lista vacía es
+      # el modo de fallo REAL de este servicio: si `OLLAMA_MODELS` no toma, la imagen mira
+      # /root/.ollama/models, encuentra 0 modelos y sirve felizmente… nada. Un stack roto que parece sano.
+      # Peor todavía por lo que hay aguas abajo: docker/axon.yml pinea el cerebro con `--model qwen3.8:27b`,
+      # y axon con `--model` explícito NO consulta capacidades para elegir (src/cli.ts buildSession: si
+      # `opts.model` viene dado, `hasLocal = true` sin preguntarle a Ollama). O sea: axon arrancaría
+      # anunciando un cerebro que no existe. El healthcheck es lo único que atrapa eso.
+      #
+      # El comando: `tail -n +2` tira la cabecera (`NAME  ID  SIZE  MODIFIED`) y `grep -q .` exige al menos
+      # UNA fila. Si el server está caído, `ollama list` no imprime nada en stdout → grep falla igual.
+      # Correcto en los dos casos sin depender de `pipefail` (grep es el último de la tubería).
+      # Sin dependencias nuevas: la imagen NO trae curl/wget, pero es Ubuntu 24.04 (verificado con
+      # `docker history`) → hay /bin/sh, que es lo único que CMD-SHELL necesita. Formato de salida
+      # verificado contra el binario nativo, que es el mismo: cabecera + una fila por modelo.
+      # COSTO: `ollama list` pega a GET /api/tags — leer manifests, NADA de cargar pesos. Medido en vivo:
+      # 5 ms, y `GET /api/ps` sigue devolviendo `{"models":[]}` después ⇒ no calienta ni desaloja nada.
+      test: ["CMD-SHELL", "ollama list | tail -n +2 | grep -q ."]
+      # interval 5s: axon ESPERA a que ollama esté healthy (docker/axon.ollama.yml) → la latencia de
+      # detección es latencia de arranque del stack. A 5 ms el probe, medirlo cada 5 s no cuesta nada.
+      interval: 5s
       timeout: 5s
-      retries: 12
-      start_period: 20s
+      retries: 12          # tras el start_period: 12 × 5 s = 60 s antes de declararlo enfermo
+      # 40 s (subido de 20): el nativo contesta en 5 ms, pero eso es un daemon YA caliente. El contenedor
+      # paga además la inicialización del runtime CUDA sobre DOS GPUs (`count: all`) y el primer recorrido
+      # de los manifests del store de 34 GB montado. No está MEDIDO en contenedor (no se levantó nada en
+      # esta pasada) → se elige por el lado seguro. No cuesta: el primer probe exitoso marca healthy y
+      # termina el start_period; lo único que hace es no contar fallos mientras el runtime nace.
+      start_period: 40s
     restart: unless-stopped
 
   # Con Ollama DENTRO del stack, Odysseus deja de salir por host.docker.internal y lo alcanza por la red
@@ -95,5 +118,16 @@ services:
       # AXON_OLLAMA_URL va SIN sufijo. Son dos contratos distintos contra el mismo motor.
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434/v1}
     depends_on:
+      # service_STARTED, NO healthy — y el cambio es deliberado (antes decía `healthy`).
+      # Odysseus consulta a Ollama de forma PEREZOSA, por request desde la UI: no hay un one-shot de
+      # arranque que pierda estado si Ollama todavía no está. Lo único que hace al boot es probar
+      # endpoints de modelos, y eso ya degrada sin ruido — se ve en sus propios logs:
+      #   `routes.model_routes - WARNING - Failed to probe http://…:7090/v1/models: Connection refused`
+      # y la app sigue arrancando. Exigir `healthy` compraría un SPOF caro: un Ollama sin modelos
+      # (o con la GPU en mal día) dejaría a Odysseus SIN ARRANCAR — correo, tareas, RAG, galería y
+      # todo lo que no toca un LLM, caídos por el motor de inferencia. `started` da el orden bonito
+      # sin comprar ese riesgo. Quien SÍ necesita a Ollama SANO es axon — esa arista, que es dura, vive
+      # en su propio overlay `docker/axon.ollama.yml` (solo entra cuando AMBOS servicios están en el -f).
       ollama:
-        condition: service_healthy
+        condition: service_started
+
