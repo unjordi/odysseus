@@ -80,7 +80,7 @@ El layout `blobs/` + `manifests/` es el mismo que la imagen oficial espera: es e
   blobs nuevos que baje el contenedor quedan `root:root`; para revertir del todo,
   `pkexec chown -R ollama:ollama /var/lib/ollama-models` una vez.
 
-## La terminal del widget: el broker se queda en el HOST (decisión, no omisión)
+## La terminal del widget: el broker se queda en el HOST — y es de **cortex**
 
 `axon-term-broker.service` da una terminal **de la computadora**: `zsh` real, como `unjordi`, con su
 entorno, sus claves y sus repos. Dentro de un contenedor daría el shell **del contenedor** — otra cosa, y
@@ -88,20 +88,67 @@ menos útil. Las tres opciones y su precio:
 
 | opción | qué pasa | precio |
 |---|---|---|
-| **A. broker en el host (elegida)** | axon del contenedor le reenvía por `host.docker.internal:8799` con token | el broker sigue siendo una pieza nativa; se documenta y se vigila |
+| **A. broker en el host (elegida)** | axon del contenedor le reenvía por `host.docker.internal:8799` con token | queda una pieza nativa — **resuelto**: no es de axon, es de `cortex` (abajo) |
 | **B. broker dentro del contenedor** | shell del contenedor | **rompe la terminal en uso**: sin las herramientas del host, sin `~/code`, sin credenciales |
 | **C. contenedor con acceso al host** (`--pid=host`, `/` montado, docker.sock) | terminal "casi" del host | el contenedor deja de ser un límite: cualquier bug de axon es root en la máquina. **No** |
 
-Se implementó **A**: el compose pasa `AXON_TERM_BROKER_URL`/`_TOKEN`; **sin token, axon degrada solo** al
-shell del contenedor, sin fallar. La terminal en uso **no se toca**.
+Se implementó **A** — y la pregunta de "¿y entonces queda una pieza nativa suelta?" tiene respuesta:
+esa pieza **tiene dueño, y no es axon** (ver abajo). El compose pasa `AXON_TERM_BROKER_URL`/`_TOKEN`;
+**sin token, axon degrada solo** al shell del contenedor, sin fallar. La terminal en uso **no se toca**.
 
-> ### ❓ PARQUEADO — pregunta para el dueño (sí/no)
-> **¿El broker de la terminal se queda como servicio nativo del host (systemd), o lo bajamos también a
-> un contenedor con acceso privilegiado al host?**
-> Recomendación: **que se quede nativo**. Un contenedor que puede dar shell de la máquina anfitriona no
-> es un límite de seguridad, es un disfraz — y ahí sí perderíamos algo real a cambio de uniformidad.
-> Si la respuesta es "que se quede", queda **una** pieza nativa y hay que decirlo en voz alta:
-> `axon-term-broker.service` es la excepción declarada, no un olvido.
+### El broker es una pieza de **cortex**, no una excepción de axon (resuelto 2026-09-07)
+
+La opción A dejaba una incomodidad: *"queda UNA pieza nativa y hay que decirlo en voz alta"*. La salida no
+era ninguna de las tres — era **de quién es el broker**. Un shell de la máquina anfitriona no es una pieza
+del harness: es **infraestructura per-máquina**. Y quien ya gestiona la infraestructura per-máquina de esta
+compu (hooks globales, servicios de usuario, config que no viaja por el git de un proyecto) es **cortex**
+(`~/code/cortex`). Deja de ser "la excepción incómoda del stack de axon" y pasa a ser **un servicio de
+cortex** con su propio dueño, que es su naturaleza real.
+
+**Contrato, ya limpio:** axon-en-contenedor es un **cliente**. Habla con
+`host.docker.internal:8799` con token (`AXON_TERM_BROKER_URL` / `AXON_TERM_BROKER_TOKEN`) y **degrada solo**
+al shell del contenedor si el token no está. axon no instala, no arranca y no es dueño del broker. Nada del
+compose cambia con este traslado — por eso se puede decidir hoy y ejecutar en otra rebanada.
+
+**¿Cabe en cortex? Sí, y el patrón ya existe** (verificado leyendo `~/code/cortex`):
+
+| lo que el broker necesita | lo que cortex ya hace |
+|---|---|
+| unidad systemd de usuario | `src/systemd/*.service` → `install.sh` los instala en `~/.config/systemd/user/` (`install -D -m 0644`, `daemon-reload`, `enable --now`), y `uninstall.sh` los retira |
+| un ejecutable en el PATH | `bin/*.js` → `~/.local/bin/` con `install -D -m 0755` (ya hay ejecutables de Node ahí: `chats-extract.js`, `session-*.js`) |
+| **un secreto per-máquina (el token)** | **ya existe la convención**: `EnvironmentFile=-%h/.config/cortex/limits.env`, sembrado por el instalador si falta. El token del broker es exactamente ese tipo de archivo |
+| instalación opcional | `install.sh` ya tiene banderas de este tipo (`--no-plasmoid`, `--no-ccusage`) |
+
+Y el traslado es más barato de lo que parece: **el broker y sus tres dependencias
+(`term-host-broker.ts` + `term-session.ts` + `term-pty-bridge.ts` + `ws.ts`) son 860 líneas con CERO
+dependencias de npm** — solo builtins de `node:` (más el `script` de util-linux, ya presente). No hay
+`npm ci` que empaquetar.
+
+**Las cuatro cosas que la rebanada tiene que resolver** (no son impedimentos, son el trabajo real):
+
+1. **Cortex no tiene todavía ningún daemon long-running.** Su único servicio es `Type=oneshot` disparado
+   por un `.timer`; el broker es `Type=simple` + `Restart=on-failure`, vivo 24/7 y con PTYs hijos (hoy
+   3.4 GB de RSS, pico de 56 GB según systemd, porque adentro corren sesiones reales). Es una **capacidad
+   nueva** para cortex, no un choque — pero cambia su perfil de "recolector periódico" a "host de procesos".
+2. **Cortex es multi-OS; el broker es Linux-only** (usa `script -qfec`, `zsh`, `wl-copy`). Va **opt-in y
+   gated por OS**, como ya se hace con `--no-plasmoid` — nunca en el camino por defecto de un `install.sh`
+   en una Mac.
+3. **Cortex es clonable por terceros.** Un servicio que abre shell de la máquina en un puerto local
+   pesa distinto en un repo público: opt-in, documentado, y con el **token GENERADO por el instalador**
+   (jamás uno por defecto ni horneado).
+4. **Qué se lleva y qué se queda.** Se lleva el **servidor** (los 4 archivos + la unidad); se queda en axon
+   el **cliente** (el reenvío desde `http-server.ts` cuando hay `AXON_TERM_BROKER_TOKEN`) y el fallback al
+   shell del contenedor. Hay que decidir si el código viaja como copia en cortex o si cortex instala un
+   artefacto que axon publica — la copia duplica 860 líneas; el artefacto acopla los releases. **Esa es la
+   pregunta de diseño de esa rebanada**, no de esta.
+
+> **PENDIENTE (rebanada aparte, repo `cortex`):** mover `term-host-broker` + sus 3 módulos a
+> `cortex/src/`, con unidad en `cortex/src/systemd/axon-term-broker.service` (`%h`, no rutas absolutas),
+> instalación **opt-in** (`install.sh --con-term-broker`, gated a Linux), token **generado** por el
+> instalador en `~/.config/cortex/term-broker.env` y leído por `EnvironmentFile=`, retiro en
+> `uninstall.sh`, y decisión copia-vs-artefacto para los 4 archivos. En axon queda **solo el cliente**.
+> Mientras no se haga, `axon-term-broker.service` sigue corriendo desde `~/code/axon-run` tal como hoy:
+> el compose no lo toca y la terminal en uso no se entera.
 
 ## FreeToken: **parqueado**, con la razón técnica
 
