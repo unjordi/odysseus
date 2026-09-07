@@ -83,23 +83,45 @@ function _els() {
   };
 }
 
-/** Badge host/container — idéntico al del modo one-shot (fail-safe a "container"). */
+/**
+ * Badge de ALCANCE de la terminal. TRES estados, porque axon ahora SONDEA al broker en vez de deducir el
+ * modo de que las env estén puestas (`GET /api/axon/term/mode`):
+ *   host       — corre en la máquina del usuario. El broker contestó.
+ *   container  — no hay broker configurado; corre dentro del contenedor.
+ *   host-down  — hay broker configurado pero NO responde (o rechaza el token) ⇒ la terminal va a fallar,
+ *                y NO cae al shell del contenedor (sería otra máquina). Se pinta distinto a `container`
+ *                a propósito: "no hay host" y "el host está caído" son problemas distintos.
+ *
+ * Por qué importa (bug 2026-09-07): el badge decía `host` mientras cada comando moría en 502, porque el
+ * endpoint solo miraba `Boolean(URL && TOKEN)`. Un badge calculado de la CONFIGURACIÓN no puede ser honesto
+ * sobre el ESTADO. Con `host-down` NO se latchea el resultado: se vuelve a sondear en cada apertura del
+ * widget, para que el badge se cure solo en cuanto el broker vuelva.
+ */
 async function _refreshBadge() {
   if (_badgeFetched) return;
   const { badge } = _els();
   if (!badge) return;
-  let mode = 'container', ok = false;
+  let mode = 'container', ok = false, detail = '';
   try {
     const res = await fetch('/api/axon/term/mode', { credentials: 'same-origin' });
-    if (res.ok) { const d = await res.json(); if (d && (d.mode === 'host' || d.mode === 'container')) { ok = true; if (d.mode === 'host') mode = 'host'; } }
+    if (res.ok) {
+      const d = await res.json();
+      if (d && (d.mode === 'host' || d.mode === 'container' || d.mode === 'host-down')) {
+        ok = true; mode = d.mode; detail = typeof d.detail === 'string' ? d.detail : '';
+      }
+    }
   } catch { /* deja container */ }
-  if (ok) _badgeFetched = true;
-  badge.textContent = mode;
+  // `host-down` es transitorio: no se cachea, así el badge se recupera cuando el broker vuelva.
+  if (ok && mode !== 'host-down') _badgeFetched = true;
+  badge.textContent = mode === 'host-down' ? 'host ⚠' : mode;
   badge.classList.toggle('host', mode === 'host');
-  badge.classList.toggle('container', mode !== 'host');
+  badge.classList.toggle('host-down', mode === 'host-down');
+  badge.classList.toggle('container', mode === 'container');
   badge.title = mode === 'host'
     ? 'Corre en tu HOST (vía el broker de axon), como tú — ver docs/terminal.md'
-    : 'Corre dentro del contenedor de axon (cwd del maincar), no en tu host — ver docs/terminal.md';
+    : mode === 'host-down'
+      ? `El broker del host está configurado pero NO responde: los comandos van a fallar (no se cae al shell del contenedor a propósito — sería otra máquina). ${detail}`.trim()
+      : 'Corre dentro del contenedor de axon (cwd del maincar), no en tu host — ver docs/terminal.md';
 }
 
 // ─────────────────────────────── modo PTY (xterm.js + WebSocket) ───────────────────────────────
