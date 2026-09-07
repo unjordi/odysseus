@@ -1,7 +1,8 @@
 # routes/stt_routes.py
 """STT API routes — multi-provider (local Whisper, API endpoint, browser)."""
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from typing import Optional
 import logging
 
 from src.upload_limits import read_upload_limited, STT_MAX_AUDIO_BYTES
@@ -23,8 +24,20 @@ def setup_stt_routes(stt_service):
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.post("/transcribe")
-    async def transcribe_audio(file: UploadFile = File(...)):
-        """Transcribe uploaded audio file to text"""
+    async def transcribe_audio(
+        file: UploadFile = File(...),
+        language: Optional[str] = Form(None),
+        model: Optional[str] = Form(None),
+        initial_prompt: Optional[str] = Form(None),
+        vad_filter: Optional[str] = Form(None),
+    ):
+        """Transcribe uploaded audio file to text.
+
+        The optional form fields are a per-request override of the saved STT
+        config — e.g. `language=en` for "this clip is in English" — and are
+        validated (and dropped when invalid) by the service. They never mutate
+        the global settings: omit them and the request behaves exactly as before.
+        """
         try:
             if not stt_service.available:
                 raise HTTPException(
@@ -36,7 +49,17 @@ def setup_stt_routes(stt_service):
             if not audio_bytes:
                 raise HTTPException(status_code=400, detail={"message": "Empty audio file"})
 
-            text = stt_service.transcribe(audio_bytes)
+            options = {
+                k: v
+                for k, v in (
+                    ("language", language),
+                    ("model", model),
+                    ("initial_prompt", initial_prompt),
+                    ("vad_filter", vad_filter),
+                )
+                if v is not None
+            }
+            text = stt_service.transcribe(audio_bytes, options) if options else stt_service.transcribe(audio_bytes)
             if text is None:
                 raise HTTPException(
                     status_code=500,

@@ -1,0 +1,179 @@
+# docker/axon.yml — axon como MAIN CAR, servicio del MISMO stack que Odysseus (#26g).
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# POR QUÉ ESTÁ AQUÍ Y NO EN SU PROPIO COMPOSE (la razón de fondo, no comodidad)
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# axon serve --proxy es la PUERTA de Odysseus: el chat lo atiende el cerebro de axon y TODO lo demás se
+# proxea a Odysseus, con el que además comparte `app.db`. No son dos apps: son una superficie. Mientras
+# axon vivió aparte (nativo con systemd, o `docker run` suelto) el precio fue MEDIBLE:
+#   • 2026-09-07 — 12 PRs mergeadas a develop y el axon en vivo 12 commits atrás. El gate de
+#     entregabilidad, el router por rol y el fix de input-stripping: integrados y NO corriendo, sin que
+#     nada lo señalara.
+#   • el frontend de la terminal se parcheó con `docker cp` 4 veces en UN día → drift que hubo que rescatar.
+# El contenedor dentro de este stack es el MECANISMO que hace imposible el atajo: no hay proceso que
+# tocar en caliente, y `levantar-stack.sh` actualiza a los dos de un tirón.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# POR QUÉ NO HAY `build:` EN ESTE SERVICIO (a propósito — es el candado, no un olvido)
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# Un `build: context: ../axon` compilaría el ÁRBOL DE TRABAJO de axon: la rama que esté checked-out, con
+# los cambios sin commitear. Eso es exactamente el bug — desplegar algo que no es lo integrado. Aquí se
+# consume una IMAGEN YA CONSTRUIDA por la herramienta oficial de release de axon
+# (`axon/scripts/publish-axon.sh`), que buildea desde `origin/develop` vía un worktree temporal limpio y
+# HORNEA el commit en la imagen (AXON_BUILD_COMMIT → GET /api/axon/version).
+# ⇒ la ÚNICA forma de cambiar lo que axon sirve es publicar una imagen nueva desde develop.
+# El tag ES la prueba: `AXON_IMAGE_TAG=<sha-corto-de-develop>`. Lo encadena `levantar-stack.sh`.
+#
+# Uso: NO invoques este overlay a mano — corre `./levantar-stack.sh` (arma el `-f` completo, publica la
+# imagen desde develop y hace el `up`). El detalle del comando está en ese script.
+
+services:
+  axon:
+    # Imagen construida por publish-axon.sh. `:latest` funciona pero es MÓVIL (no prueba nada);
+    # levantar-stack.sh siempre fija el sha corto de origin/develop → el tag dice qué se desplegó.
+    image: ${AXON_IMAGE:-potenciaindustrial/axon}:${AXON_IMAGE_TAG:-latest}
+    # `missing` (el default, explícito para que se lea): usa la imagen LOCAL si existe — que es el caso,
+    # porque publish-axon.sh acaba de construirla en este mismo dockerd. Solo va al registry si falta.
+    pull_policy: missing
+    # SIN `container_name:` a propósito → compose lo nombra `odysseus-axon-1`, igual que sus hermanos.
+    # El nombre fijo `axon-maincar` era del `docker run` suelto de antes; conservarlo aquí CHOCARÍA con
+    # ese contenedor viejo ("name is already in use") y volvería a esconder que ahora es parte del stack.
+    depends_on:
+      # service_HEALTHY (subido desde `service_started`). El comentario anterior decía —con razón en su
+      # momento— que "el compose de Odysseus NO le declara healthcheck al servicio odysseus, así que
+      # exigir healthy colgaría el arranque para siempre". Ese impedimento YA NO EXISTE: odysseus tiene
+      # healthcheck propio (`GET /api/health`, en los tres docker-compose*.yml), y llega a healthy en
+      # ~4 s medidos. Sin el impedimento, `healthy` es lo correcto:
+      #   • axon es la PUERTA — todo lo que no sea /api/chat_stream se proxea a Odysseus. Arrancar antes
+      #     de que Odysseus acepte requests significa que el PRIMER page-load del navegador da 502; el
+      #     usuario ve una app rota y recarga. No es una carrera teórica: es la que se ve.
+      #   • el costo es ~4 s de espera, una vez, en el `up`.
+      # NO es un `depends_on` de más: axon SIN Odysseus no es un servicio degradado, es una puerta a un
+      # edificio vacío. La dependencia es real, así que se declara real.
+      odysseus:
+        condition: service_healthy
+    # MAIN CAR: chat → cerebro de axon; TODO lo demás → proxy a Odysseus por el NOMBRE DE SERVICIO de la
+    # red del compose. (El `docker run` que probó esto el 2026-09-02 usaba el nombre de CONTENEDOR
+    # `odysseus-odysseus-1` porque venía de fuera del proyecto; adentro, `odysseus` es el alias estable
+    # que no depende del sufijo de réplica ni del nombre del proyecto.)
+    # Odysseus publica su puerto SOLO en 127.0.0.1 del host → host.docker.internal NO lo alcanza: la red
+    # interna es la única vía, y estar en el mismo proyecto es lo que la da gratis.
+    # --model fija un cerebro DENSO (qwen3.8:27b) en vez del auto-select, que rankea por params CRUDOS y
+    # aterriza en el MoE qwen3:30b (~3B activos, el peor en adherencia de formato/tool-calling) —
+    # dictamen auditoría-loop-agentico A3. Pinearlo aquí lo hace durable a un recreate del contenedor.
+    command:
+      - ./bin/axon
+      - serve
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "7001"
+      - --proxy
+      - http://odysseus:7000
+      - --dir
+      - /workspace
+      - --model
+      - ${AXON_BRAIN_MODEL:-qwen3.8:27b}
+      - --tls-cert
+      - /certs/fullchain.crt
+      - --tls-key
+      - /certs/privkey.key
+    ports:
+      # HTTPS nativo en :7001. Sin TLS el navegador trata el origen como INSEGURO (sin service worker,
+      # sin getUserMedia) — por eso el cert wildcard *.pisa.mx va montado abajo y no hay reverse proxy.
+      - "${AXON_BIND:-0.0.0.0}:${AXON_SERVE_PORT:-7001}:7001"
+    environment:
+      # Motor de inferencia. Con el overlay docker/ollama.yml, `ollama` es un servicio de ESTE stack y se
+      # alcanza por la red interna. Si se levanta SIN ese overlay (Ollama nativo en el host), pásale
+      #   AXON_OLLAMA_URL=http://host.docker.internal:11434
+      # por el .env — el extra_hosts de abajo ya deja esa vía abierta.
+      - AXON_OLLAMA_URL=${AXON_OLLAMA_URL:-http://ollama:11434}
+      # FreeToken (motor MoE gpt-oss-120b, OpenAI-compat). Hoy vive NATIVO y BAJO DEMANDA (systemd user,
+      # `disabled`): AUSENTE ES EL CASO NORMAL, no un error — axon lo detecta por /v1/models y degrada al
+      # carril Ollama sin ruido (src/freetoken-capabilities.ts). host.docker.internal alcanza al host.
+      # Ver docs/stack-unificado.md § FreeToken para por qué NO está contenerizado todavía.
+      - AXON_FREETOKEN_URL=${AXON_FREETOKEN_URL:-http://host.docker.internal:7090}
+      # Frontera (Anthropic). Opcional: sin key axon sigue en carril local. NUNCA horneada en la imagen.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Persistencia compartida con Odysseus: las sesiones que crea axon aparecen en la lista del SPA.
+      # La ruta es la de DENTRO del contenedor; el bind de abajo la ata al mismo `data/` de Odysseus.
+      - AXON_ODYSSEUS_DB=/odysseus-data/app.db
+      - AXON_ODYSSEUS_OWNER=${AXON_ODYSSEUS_OWNER:-unjordi}
+      # Terminal: el widget ejecuta en el HOST como el usuario real, no como root dentro del contenedor.
+      # El broker (axon-term-broker.service, 127.0.0.1:8799) sigue en el host A PROPÓSITO — ver
+      # docs/stack-unificado.md § La terminal. Sin token, axon degrada al modo contenedor (shell del
+      # contenedor) sin fallar.
+      - AXON_TERM_BROKER_URL=${AXON_TERM_BROKER_URL:-http://host.docker.internal:8799}
+      - AXON_TERM_BROKER_TOKEN=${AXON_TERM_BROKER_TOKEN:-}
+    volumes:
+      # Repo sobre el que trabajan las tools de axon (`--dir /workspace`). RUTA IDÉNTICA a la que ya usa
+      # el despliegue vivo (axon-maincar.service: `--dir /home/unjordi/code/axon`) — no se mueve nada.
+      - ${AXON_WORKSPACE:-${HOME}/code/axon}:/workspace
+      # `data/` de Odysseus (donde vive app.db). MISMA variable que usa el servicio odysseus para su
+      # propio bind → una sola definición de la ruta, imposible que se desincronicen.
+      - ${APP_DATA_DIR:-./data}:/odysseus-data
+      # Cert wildcard *.pisa.mx del host, solo lectura. Mismas rutas que ya usa el despliegue vivo.
+      - ${AXON_TLS_CERT:-${HOME}/.ssl/pisa.mx.fullchain.crt}:/certs/fullchain.crt:ro
+      - ${AXON_TLS_KEY:-${HOME}/.ssl/pisa.mx.key}:/certs/privkey.key:ro
+      # ── ESTADO PERSISTENTE DE AXON ──────────────────────────────────────────────────────────────
+      # Sin esto, cada `up -d --build` borraría el estado del harness — el mismo drift que el
+      # empaquetado viene a matar, con otra cara. Qué vive aquí:
+      #   ~/.axon/runs/<id>.json  → los run records de `axon ps` (hoy 1.8 MB de historia en el host)
+      #   ~/.axon/plugins/        → plugins locales opt-in (#16)
+      #   ~/.axon/*.db            → la BD SQLite de la bitácora de prompting/rebotes (rebanada aparte;
+      #                             el compose ya la contempla, no habrá que rehacerlo cuando exista)
+      #   ~/.cache/axon/routes.jsonl → el route-log (append-only)
+      # SON BINDS AL HOST, no volúmenes nombrados, A PROPÓSITO: unjordi también corre `axon` nativo desde
+      # la terminal, y un volumen nombrado partiría la historia en dos (el `axon ps` del contenedor no
+      # vería lo del host y viceversa). Con el bind, contenedor y CLI comparten un solo corpus — y el que
+      # ya existe NO se pierde al contenerizar. Concurrencia: los run records son un archivo por run (sin
+      # contención) y el route-log es append-only; SQLite sobre un bind local maneja sus propios locks.
+      - ${AXON_STATE_DIR:-${HOME}/.axon}:/axon-home/.axon
+      - ${AXON_CACHE_DIR:-${HOME}/.cache/axon}:/axon-home/.cache/axon
+    working_dir: /app
+    # MISMO uid/gid que Odysseus (PUID/PGID). Es lo que hace que el estado de axon y —sobre todo— los
+    # archivos que crea DENTRO del repo montado queden del USUARIO del host y no de root:
+    #   • los subagentes de axon hacen `git worktree add` sobre /workspace → escriben en /workspace/.git/.
+    #     Corriendo como root eso funciona (root ignora permisos) pero deja `.git/worktrees/...` root:root,
+    #     y el humano ya no puede podarlos ni operar el repo sin pkexec. Con uid 1000 no pasa.
+    #   • app.db de Odysseus es 0600 del usuario 1000 → como root también se abre, pero cualquier journal
+    #     (-wal/-shm) que cree axon quedaría root:root y Odysseus (que corre como PUID/PGID) fallaría.
+    # La imagen crea /axon-home ya con este dueño (ver Dockerfile de axon, ARG AXON_UID/AXON_GID).
+    user: "${PUID:-1000}:${PGID:-1000}"
+    extra_hosts:
+      # Para alcanzar lo que siga en el HOST: el broker de la terminal (:8799), FreeToken bajo demanda
+      # (:7090) y —si se corre sin el overlay de ollama— el Ollama nativo (:11434).
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      # QUÉ SIGNIFICA LISTO PARA AXON: que el servidor HTTP responde Y puede decir QUÉ COMMIT sirve.
+      # `GET /api/axon/version` es el probe: barato, sin auth (a propósito — ver el comentario del handler
+      # en src/server/http-server.ts: "es el endpoint que consulta el HEALTHCHECK del contenedor"), va
+      # ANTES del proxy (nunca cruza a Odysseus) y NO toca el modelo. Y de paso es el chequeo de drift
+      # mergeado↔desplegado (#26g). node built-in porque node:22-slim no trae curl/wget.
+      #
+      # ⚠️ **`https`, NO `http`** — esto era un bug que habría dejado a axon `unhealthy` PARA SIEMPRE.
+      # El `command:` de arriba pasa `--tls-cert/--tls-key`, y con TLS `createChatServer` devuelve un
+      # `createHttpsServer` en LUGAR del `http.createServer` (src/server/http-server.ts:1229-1245): hay
+      # UN solo listener en :7001 y habla TLS. Un GET en http plano contra él nunca da 200.
+      # `rejectUnauthorized:false` es obligatorio y no afloja nada: el cert es el wildcard `*.pisa.mx` y
+      # el probe pega a `127.0.0.1` — la IP no está en el SAN, así que la validación fallaría por el
+      # nombre, no por confianza. Es un probe local contra el propio proceso, dentro del contenedor.
+      # ⇒ REGLA: `--tls-cert/--tls-key` en `command:` y el esquema de este `test:` son LA MISMA decisión.
+      #   Si algún día quitas el TLS de ahí arriba, cambia también `https` por `http` aquí abajo.
+      #
+      # NO VERIFICADO EN VIVO: no se levantó el contenedor de axon en esta pasada. Lo comprobado es la
+      # ruta de código (TLS reemplaza el server plano) y que el endpoint existe y responde 200 sin auth.
+      test: ["CMD", "node", "-e", "require('https').get({host:'127.0.0.1',port:7001,path:'/api/axon/version',rejectUnauthorized:false},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      # interval 30s: NADIE depende de axon — es la hoja del grafo. Su salud es informativa (la mira el
+      # humano en `docker compose ps` y el reporte de levantar-stack.sh), no desbloquea a nadie.
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # 45 s (subido de 20). Antes de escuchar, `axon serve` hace un arranque con trabajo real:
+      # `buildSession` consulta capacidades locales por HTTP (`GET /api/tags` contra Ollama,
+      # src/capabilities.ts), abre la SQLite de Odysseus (`AXON_ODYSSEUS_DB`) y lee cert+key de TLS —
+      # todo ANTES del `server.listen`. 20 s dejaba poco aire para un arranque en frío del runtime de
+      # Node más esas tres cosas. NO MEDIDO (no se levantó): se elige por el lado seguro, y no cuesta —
+      # el primer probe exitoso cierra el start_period.
+      start_period: 45s
+    restart: unless-stopped

@@ -251,6 +251,9 @@
   <link rel="modulepreload" href="/static/js/ui.js">
   <link rel="modulepreload" href="/static/js/sessions.js">
   <link rel="modulepreload" href="/static/js/markdown.js">
+  <link rel="stylesheet" href="/static/lib/xterm.css">
+  <script defer src="/static/lib/xterm.js"></script>
+  <script defer src="/static/lib/addon-fit.js"></script>
 </head>
 <body>
   <!-- Loading overlay — hides all flashing until app is ready -->
@@ -501,6 +504,33 @@
     </div>
   </div>
 
+  <!-- Terminal (widget que corre comandos en axon — ver docs/terminal.md del repo axon: scope
+       CONTENEDOR del maincar, no el host, salvo que se monte/extienda explícitamente) -->
+<div id="term-modal" class="modal hidden">
+  <div class="modal-content term-modal-content" role="dialog" aria-label="Terminal" style="background:var(--bg)">
+    <div class="modal-header">
+      <h4><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>Terminal <span id="term-scope-badge" class="term-scope-badge" title="Consultando modo…">…</span></h4>
+      <button type="button" id="term-clear-btn" title="Limpiar salida" aria-label="Limpiar salida" style="background:none;border:1px solid var(--border,#3a3a3a);color:var(--text-dim,#9aa);cursor:pointer;font-size:11px;border-radius:6px;padding:2px 8px;margin-right:8px">Clear</button>
+      <button class="close-btn" id="close-term-modal" aria-label="Close terminal">&#x2716;</button>
+    </div>
+    <div class="modal-body term-modal-body">
+      <!-- Modo PTY interactivo (xterm.js monta aquí). Oculto hasta que el WS conecta. -->
+      <div id="term-xterm" class="term-xterm hidden"></div>
+
+      <!-- Modo ONE-SHOT degradado (fallback si el PTY no está disponible). Oculto por default. -->
+      <div id="term-oneshot" class="term-oneshot hidden">
+        <pre id="term-output" class="term-output" aria-live="polite"></pre>
+        <div class="term-input-row">
+          <span class="term-prompt">$</span>
+          <input type="text" id="term-input" class="term-input" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="comando…" aria-label="Comando de terminal" />
+          <button type="button" id="term-run-btn" class="term-run-btn" title="Correr (Enter)">Run</button>
+          <button type="button" id="term-stop-btn" class="term-stop-btn hidden" title="Detener">Stop</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
   <!-- Theme Popup (floating panel) -->
   <div id="theme-modal" class="modal hidden">
   <div id="theme-popup" class="modal-content admin-modal-content" role="dialog" aria-label="Theme" style="background:var(--bg)">
@@ -743,9 +773,29 @@
     <button class="icon-rail-btn" id="rail-notes" title="Notes"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3h10l4 4v14H5z"/><path d="M15 3v5h5"/><path d="M8 17.5 15.5 10l2.5 2.5L10.5 20H8z"/></svg></button>
     <button class="icon-rail-btn" id="rail-tasks" title="Tasks"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M9 16l2 2 4-4"/></svg></button>
     <button class="icon-rail-btn" id="rail-theme" title="Theme"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 0 0 20 5 5 0 0 0 5-5 3 3 0 0 0-3-3h-2a3 3 0 0 1-3-3 5 5 0 0 1 5-5"/></svg></button>
+    <!-- axon group — single launcher, opens the #axon-flyout submenu -->
+    <button class="icon-rail-btn" id="rail-axon" title="axon" aria-haspopup="true" aria-expanded="false" aria-controls="axon-flyout"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="12" r="3"/><path d="M3.1 10.1 1.4 8.6M3 12H1.2M3.1 13.9 1.4 15.4"/><path d="M8.5 12h11"/><circle cx="13" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="20.5" cy="12" r="1.7" fill="currentColor" stroke="none"/></svg></button>
     <div style="flex:1"></div>
-    <!-- Static: bottom -->
+    <!-- Static: bottom — Axon Config vive en el footer (config, junto a Settings), no en el grupo de plugins -->
+    <button class="icon-rail-btn" id="rail-axoncfg" title="Axon Config"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="currentColor" stroke="none"/></svg></button>
     <button class="icon-rail-btn" id="rail-settings" title="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+  </div>
+
+  <!-- axon submenu — flyout for our grouped widgets, delegates to the hidden tool-*-btn openers.
+       Reparented to <body> and positioned next to the rail on open (mirrors .export-dropdown-menu). -->
+  <div class="axon-flyout" id="axon-flyout" role="menu" aria-label="axon tools">
+    <button type="button" class="axon-flyout-item" role="menuitem" data-tool="tool-cortex-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="16" r="2.2"/><circle cx="19" cy="16" r="2.2"/><path d="M12 7.2 5 13.8M12 7.2l7 6.6M7.2 16h9.6"/></svg>
+      <span>Claude · Cortex</span>
+    </button>
+    <button type="button" class="axon-flyout-item" role="menuitem" data-tool="tool-term-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+      <span>Terminal</span>
+    </button>
+    <button type="button" class="axon-flyout-item" role="menuitem" data-tool="tool-hoststats-btn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2 5 4-14 2 9 2-3h4"/></svg>
+      <span>Host Stats</span>
+    </button>
   </div>
 
   <nav class="sidebar" id="sidebar" role="navigation" aria-label="Sidebar">
@@ -956,6 +1006,52 @@
           </svg>
           <span class="grow">Theme</span>
         </div>
+
+      </div>
+
+      <!-- axon — OUR grouped widgets, split out of "Tools". These .list-item
+           openers keep their IDs; the rail #axon-flyout and _railToolMap
+           still .click() them to open each widget. -->
+      <div class="section" id="axon-section">
+        <div class="section-header-flex">
+          <span class="section-title"><svg class="section-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="12" r="3"/><path d="M3.1 10.1 1.4 8.6M3 12H1.2M3.1 13.9 1.4 15.4"/><path d="M8.5 12h11"/><circle cx="13" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="20.5" cy="12" r="1.7" fill="currentColor" stroke="none"/></svg>axon</span>
+        </div>
+
+        <div class="list-item" id="tool-cortex-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            style="flex-shrink:0;opacity:0.5;">
+            <circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="16" r="2.2"/><circle cx="19" cy="16" r="2.2"/>
+            <path d="M12 7.2 5 13.8M12 7.2l7 6.6M7.2 16h9.6"/>
+          </svg>
+          <span class="grow">Claude · Cortex</span>
+        </div>
+
+        <div class="list-item" id="tool-term-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            style="flex-shrink:0;opacity:0.5;">
+            <polyline points="4 17 10 11 4 5"/>
+            <line x1="12" y1="19" x2="20" y2="19"/>
+          </svg>
+          <span class="grow">Terminal</span>
+        </div>
+
+        <div class="list-item" id="tool-axoncfg-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+            style="flex-shrink:0;opacity:0.5;">
+            <line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"/>
+            <line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"/>
+            <line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="currentColor" stroke="none"/>
+          </svg>
+          <span class="grow">Axon Config</span>
+        </div>
+
+        <div class="list-item" id="tool-hoststats-btn">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;opacity:0.5;"><path d="M3 12h4l2 5 4-14 2 9 2-3h4"/></svg>
+          <span class="grow">Host Stats</span>
+        </div>
       </div>
     </div>
     <div class="sidebar-user-bar" id="sidebar-user-bar">
@@ -1038,6 +1134,15 @@
       <div class="chat-input-top">
         <div id="message-ghost" class="ghost-text-overlay" aria-hidden="true"></div>
         <textarea id="message" placeholder="Message Odysseus..." required autocomplete="off" aria-label="Message input" rows="1" autofocus></textarea>
+        <!-- Whisper-flow dictation indicator — shown while #voice-input-btn is listening -->
+        <div id="voice-flow-status" class="voice-flow-status" hidden role="status" aria-live="polite">
+          <span class="voice-flow-dot" aria-hidden="true"></span>
+          <span class="voice-flow-label">Listening…</span>
+          <span class="voice-flow-interim"></span>
+          <button type="button" class="voice-flow-stop" id="voice-flow-stop-btn" title="Stop dictation" aria-label="Stop dictation">
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+          </button>
+        </div>
         <div id="plan-mode-status" class="plan-mode-status" hidden>
           <span class="plan-mode-status-label">Plan mode</span>
           <button type="button" id="plan-mode-status-toggle" class="plan-mode-status-toggle" aria-label="Turn off plan mode" aria-pressed="true">
@@ -1142,6 +1247,10 @@
               </button>
             </div>
           </div>
+          <!-- Voice dictation ("whisper-flow" style: talk, text streams into the composer) -->
+          <button type="button" class="input-icon-btn" title="Dictate by voice" id="voice-input-btn" aria-label="Dictate by voice" aria-pressed="false">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+          </button>
           <!-- Web search (magnifying glass) -->
           <button type="button" class="input-icon-btn" title="Web search" id="web-toggle-btn" data-mode-tool="true" aria-label="Web search" aria-pressed="false">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1628,19 +1737,20 @@
               <div id="set-imgSettingsMsg" style="font-size:11px;color:color-mix(in srgb, var(--fg) 45%, transparent);"></div>
             </div>
           </div>
-          <!-- TTS panel hidden — user opted out of read-aloud entirely. Kept
-               in DOM so the JS that wires set-ttsProviderSelect etc. doesn't
-               throw on missing nodes; not visible to anyone. -->
-          <div class="admin-card" hidden style="display:none">
+          <!-- Text to Speech — read-aloud for assistant messages. Default
+               provider = the local Kokoro sidecar (docker/gpu.tts.yml), natural
+               Spanish/multilingual, no external API. -->
+          <div class="admin-card">
             <h2 style="display:flex;align-items:center;gap:6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px;opacity:0.6"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>Text to Speech<span style="flex:1"></span><label class="admin-switch"><input type="checkbox" id="set-ttsEnabledToggle" checked><span class="admin-slider"></span></label></h2>
-            <div class="admin-toggle-sub" style="margin-bottom:8px">Configure TTS provider for assistant message read-aloud.</div>
+            <div class="admin-toggle-sub" style="margin-bottom:8px">Read assistant messages aloud. Local Kokoro sidecar is the default — natural Spanish, no external API. A "Read aloud" ▶ button appears on each assistant message.</div>
             <div style="display:flex;flex-direction:column;gap:0.5rem;">
               <div style="display:flex;align-items:center;gap:0.75rem;">
                 <label class="settings-label">Provider</label>
                 <select id="set-ttsProviderSelect" class="settings-select">
                   <option value="disabled">Disabled</option>
                   <option value="browser">Browser (built-in)</option>
-                  <option value="local">Local (Kokoro-82M)</option>
+                  <option value="kokoro">Kokoro (local sidecar · español)</option>
+                  <option value="local">Kokoro-82M (in-process · native install)</option>
                 </select>
               </div>
               <div id="set-ttsModelRow" style="display:flex;align-items:center;gap:0.75rem;">
@@ -2550,9 +2660,85 @@
   <!-- Toast container (aria-live for screen readers) -->
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+<!-- ── Axon Config panel (configura el cerebro/modo de axon sin escarbar env vars) ── -->
+<div id="axoncfg-modal" class="modal hidden">
+  <div class="modal-content axoncfg-content" role="dialog" aria-label="Axon Config">
+    <div class="modal-header">
+      <h4><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="currentColor" stroke="none"/></svg>Axon Config</h4>
+      <button class="close-btn" id="close-axoncfg-modal" aria-label="Close axon config">✖</button>
+    </div>
+    <div class="modal-body axoncfg-body">
+      <div class="axoncfg-row">
+        <label for="axoncfg-model">Cerebro (modelo local)</label>
+        <select id="axoncfg-model"></select>
+      </div>
+      <div class="axoncfg-row">
+        <label for="axoncfg-mode">Modo</label>
+        <select id="axoncfg-mode">
+          <option value="build">build — todas las tools</option>
+          <option value="plan">plan — solo lectura</option>
+        </select>
+      </div>
+      <div class="axoncfg-ollama" id="axoncfg-ollama"></div>
+      <div class="axoncfg-status" id="axoncfg-status"></div>
+    </div>
+  </div>
+</div>
+<script type="module" src="/static/js/axonConfig.js"></script>
 
+<!-- ── Claude · Cortex panel (estado de la cuota/ventana de 5h de Claude en el HOST) ──
+     Sidebar (rail) + panel, réplica del plasmoid KDE real (main.qml): Límites es la
+     pestaña activa por default; Chats se oculta hasta que haya conversaciones (mismo
+     gate que el widget real — ver cortexWidget.js). -->
+<div id="cortex-modal" class="modal hidden">
+  <div class="modal-content cortex-content" role="dialog" aria-label="Claude Cortex">
+    <div class="modal-header">
+      <h4><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="16" r="2.2"/><circle cx="19" cy="16" r="2.2"/><path d="M12 7.2 5 13.8M12 7.2l7 6.6M7.2 16h9.6"/></svg>Claude · Cortex</h4>
+      <div class="cortex-header-actions">
+        <span class="hoststats-live-dot" id="cortex-live-dot" title="Live"></span>
+        <button class="close-btn" id="close-cortex-modal" aria-label="Close cortex panel">✖</button>
+      </div>
+    </div>
+    <div class="cortex-layout">
+      <div class="cortex-rail" id="cortex-rail" role="tablist" aria-label="Secciones de Cortex">
+        <button type="button" class="cortex-rail-btn active" data-tab="limites" role="tab" aria-selected="true">📊<span>Límites</span></button>
+        <button type="button" class="cortex-rail-btn" data-tab="resumen" role="tab" aria-selected="false">📈<span>Resumen</span></button>
+        <button type="button" class="cortex-rail-btn" data-tab="modelos" role="tab" aria-selected="false">🧩<span>Modelos</span></button>
+        <button type="button" class="cortex-rail-btn" data-tab="proyectos" role="tab" aria-selected="false">📁<span>Proyectos</span></button>
+        <button type="button" class="cortex-rail-btn" data-tab="chats" id="cortex-rail-chats" role="tab" aria-selected="false" hidden>💬<span>Chats</span></button>
+        <button type="button" class="cortex-rail-btn" data-tab="cerebro" role="tab" aria-selected="false">🧠<span>Cerebro</span></button>
+      </div>
+      <div class="modal-body cortex-body" id="cortex-body">
+        <div class="hoststats-loading">[ CONNECTING… ]</div>
+      </div>
+    </div>
+  </div>
+</div>
+<script type="module" src="/static/js/cortexWidget.js"></script>
 
 <!-- Load modules in this order -->
+<!-- ── Host Stats panel (reactor-console host hardware monitor) ── -->
+<div id="hoststats-modal" class="modal hidden">
+  <div class="modal-content hoststats-content" role="dialog" aria-label="Host Stats">
+    <div class="modal-header hoststats-header">
+      <h4><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px"><path d="M3 12h4l2 5 4-14 2 9 2-3h4"/></svg>Host Stats</h4>
+      <!-- Compact mode renders its stat chips right here, INSIDE the title bar. -->
+      <div class="hs-compact-row" id="hoststats-compact-row"></div>
+      <div class="hoststats-header-actions">
+        <div class="hs-mode-switch" id="hoststats-mode-switch" role="group" aria-label="Host Stats view mode">
+          <button type="button" class="hs-mode-btn active" data-mode="full">Full</button>
+          <button type="button" class="hs-mode-btn" data-mode="compact">Compact</button>
+        </div>
+        <span class="hoststats-live-dot" id="hoststats-live-dot" title="Live"></span>
+        <button class="close-btn" id="close-hoststats-modal" aria-label="Close host stats">✖</button>
+      </div>
+    </div>
+    <div class="modal-body hoststats-body" id="hoststats-body">
+      <div class="hoststats-loading">[ CONNECTING… ]</div>
+    </div>
+  </div>
+</div>
+<script type="module" src="/static/js/hostStats.js"></script>
 <script type="module" src="/static/js/storage.js"></script>
 <script type="module" src="/static/js/ui.js"></script>
 <script type="module" src="/static/js/markdown.js"></script>

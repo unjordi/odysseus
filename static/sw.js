@@ -7,7 +7,7 @@
 //   - Other static assets (images/fonts/libs): cache-first with bg refresh.
 //   - API / non-GET: never cached.
 // Bump CACHE_NAME whenever the precache list or SW logic changes.
-const CACHE_NAME = 'odysseus-v380-shared-config-image-editor-lazy-katex-mermaid';
+const CACHE_NAME = 'odysseus-v389-final';
 
 // KaTeX resolves these from its own stylesheet, so caching the CSS without them
 // gives offline math fallback glyphs instead of proper typesetting.
@@ -86,6 +86,7 @@ const PRECACHE = [
   '/static/js/keyboard-shortcuts.js',
   '/static/js/sidebar-layout.js',
   '/static/js/section-management.js',
+  '/static/js/cortexWidget.js',
   '/static/lib/highlight.min.js',
   // Math turns up in ordinary answers and KaTeX is small, so precaching it and
   // its fonts keeps formulas typeset offline. Mermaid is deliberately NOT

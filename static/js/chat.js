@@ -4195,7 +4195,7 @@ import { loadPanel } from './panels.js';
         if (!footerTarget.querySelector('.msg-footer')) {
           footerTarget.appendChild(createMsgFooter(footerTarget));
         }
-        if (_generatedImagesForTurn.length && !_isBg) {
+        if (_generatedImagesForTurn.length && !_isBgFinal) {
           _generatedImagesForTurn.forEach(imgData => _appendGeneratedImageBubble(imgData));
         }
         // Add "View Report" link for completed research

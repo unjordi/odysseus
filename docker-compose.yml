@@ -80,9 +80,45 @@ services:
       # Find yours with:  id -u  /  id -g
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
+    healthcheck:
+      # QUÉ SIGNIFICA LISTO PARA ODYSSEUS: que uvicorn ya ACEPTA requests. No "que terminó de precargar".
+      #   • `GET /` da 302 al login (verificado en vivo) → un healthcheck que exija 200 lo marcaría enfermo
+      #     PARA SIEMPRE. Por eso NO se usa la raíz.
+      #   • `/api/health` está en AUTH_EXEMPT_EXACT (app.py) → responde 200 SIN sesión, y solo devuelve un
+      #     dict con timestamp: cero I/O, cero DB, cero red. Es el probe barato que se puede repetir para siempre.
+      #   • `/api/ready` (app.py) es la readiness REAL (DB + data dir) y sería más rico… pero NO sirve aquí:
+      #     está detrás del middleware de auth (devuelve 401, verificado) y además ESCRIBE un archivo probe en
+      #     data/ en cada llamada. Un healthcheck no escribe. Se usa UNA vez, a mano, no cada `interval`.
+      #   • Las precargas pesadas (Whisper large-v3, servidores MCP) corren en `asyncio.to_thread` como tareas
+      #     de arranque (app.py:1092) → NO bloquean el event loop: /api/health responde mientras cargan. Por eso
+      #     "listo" = sirve HTTP, y la precarga es un WARMUP, no una condición de readiness.
+      test: ["CMD", "curl", "-fsS", "--max-time", "5", "http://127.0.0.1:7000/api/health"]
+      # interval 5s: axon ESPERA a que odysseus esté healthy → cada segundo de detección es un segundo de
+      # arranque del stack. Barato (una request local sin I/O), así que se mide seguido.
+      interval: 5s
+      timeout: 8s          # > el --max-time 5 del curl, para que el timeout que mande sea el del curl
+      retries: 5           # tras el start_period: 5 fallos × 5s = 25s de gracia antes de declararlo enfermo
+      # start_period MEDIDO, no un 30 por default: arranque tibio 2026-09-07 → contenedor 18:50:22.709,
+      # "Uvicorn running on http://0.0.0.0:7000" 18:50:26.202 = 3.5 s. Los 60 s son para el arranque FRÍO
+      # (imagen recién construida, page cache vacío, FastEmbed + los round-trips a chromadb). Un start_period
+      # generoso NO cuesta nada cuando el arranque es rápido: el PRIMER probe exitoso marca healthy de
+      # inmediato; lo único que hace es no contar fallos mientras el servicio todavía está naciendo.
+      start_period: 60s
     depends_on:
+      # ── searxng: service_HEALTHY (arista dura, PRE-EXISTENTE — se conserva con su razón) ──────────
+      # La búsqueda es funcionalidad de primera clase de la app y searxng tiene un modo de fallo
+      # documentado en este mismo archivo: la tag upstream 2026.6.2 CRASHEA al boot
+      # (`KeyError: 'default_doi_resolver'`). "Arriba" no distingue eso de "sirviendo"; "healthy" sí.
+      # Precio aceptado: un searxng que nunca sana bloquea a Odysseus. Es deliberado, no un descuido.
       searxng:
         condition: service_healthy
+      # ── chromadb: service_STARTED (NO healthy — a propósito) ──────────────────────────────────────
+      # Tentador subirlo a `healthy` ahora que chromadb SÍ tiene healthcheck… y sería un `depends_on` de
+      # más. `src/rag_singleton.py` es un inicializador LAZY CON REINTENTO ("Returns the VectorRAG
+      # instance on first successful init, None if ChromaDB unavailable… retries per _RETRY_INTERVAL"):
+      # la carrera se CURA SOLA. Exigir `healthy` cambiaría un degradado temporal y auto-reparable por
+      # un SPOF: chromadb enfermo ⇒ Odysseus NO arranca, ni siquiera las 9/10 partes de la app que no
+      # tocan RAG. `started` deja el ORDEN bonito sin comprar ese riesgo.
       chromadb:
         condition: service_started
     restart: unless-stopped
@@ -95,6 +131,21 @@ services:
       - chromadb-data:/chroma/chroma
     environment:
       - ANONYMIZED_TELEMETRY=FALSE
+    healthcheck:
+      # QUÉ SIGNIFICA LISTO PARA CHROMADB: que su endpoint de heartbeat contesta — es el mismo que Odysseus
+      # consulta al arrancar (`GET /api/v2/heartbeat`, visto en sus logs). "Contenedor arriba" no basta:
+      # el proceso tarda en aceptar conexiones y ahí es donde vive la carrera.
+      # POR QUÉ ESTE COMANDO Y NO UN curl: la imagen `chromadb/chroma` NO trae curl, wget, nc NI python
+      # (verificado dentro del contenedor vivo) — solo bash 5.2. `/dev/tcp` es una feature de BASH, no de sh:
+      # el `sh` de esta imagen es dash y falla con "cannot create /dev/tcp/..." → por eso es
+      # ["CMD","bash","-c",…] y NO CMD-SHELL (CMD-SHELL invoca /bin/sh = dash). Verificado exit=0 en vivo.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8000; printf 'GET /api/v2/heartbeat HTTP/1.0\r\n\r\n' >&3; grep -q 'nanosecond heartbeat' <&3"]
+      interval: 5s         # odysseus lo espera en el orden de arranque → detección rápida
+      timeout: 5s
+      retries: 5
+      # NO MEDIDO (no se reinició nada en esta pasada): chroma arranca en segundos, pero 30 s es el margen
+      # honesto para un cold start con el sqlite ya poblado. Ajústalo con evidencia en el primer `up` real.
+      start_period: 30s
     restart: unless-stopped
 
   searxng:
@@ -161,6 +212,18 @@ services:
       - ntfy-cache:/var/cache/ntfy
     environment:
       - NTFY_BASE_URL=${NTFY_BASE_URL:-http://localhost:8091}
+    healthcheck:
+      # QUÉ SIGNIFICA LISTO PARA NTFY: su propio `/v1/health` devuelve {"healthy":true} (verificado en vivo).
+      # Se comprueba el CONTENIDO, no solo el código: ntfy responde 200 a rutas que no prueban nada.
+      # La imagen es Alpine/busybox → trae wget (no curl); `grep -q` sobre el JSON es todo lo que hace falta.
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/v1/health | grep -q '\"healthy\":true'"]
+      # interval 30s: NADIE depende de ntfy (ver el grafo en docs/stack-unificado.md). Su healthcheck existe
+      # para que `docker compose ps` diga la verdad, no para desbloquear a otro servicio → no urge medirlo seguido.
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # ntfy es un binario Go que sirve casi de inmediato; 10 s es margen de sobra y no gatea a nadie.
+      start_period: 10s
     restart: unless-stopped
 
 volumes:

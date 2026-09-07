@@ -39,6 +39,7 @@ import './js/modalManager.js?v=20260723compareicon2';
 // Desktop window tiling — drag a modal near an edge/corner to snap.
 import './js/tileManager.js';
 import themeModule from './js/theme.js';
+import terminalModule from './js/terminal.js';
 // IMPORTANT: import cookbook.js with NO ?v= query — the same plain specifier
 // every other importer (cookbook-hwfit.js / cookbook-diagnosis.js) uses. A query
 // mismatch makes the browser load cookbook.js twice as separate modules (two
@@ -60,6 +61,11 @@ window.sessionModule = sessionModule;
 window.uiModule = uiModule;
 window.adminModule = adminModule;
 window.cookbookModule = cookbookModule;
+// Exposed so settings.js (STT provider changes) and the composer's dedicated
+// mic button can reach the same voiceRecorder singleton without an import
+// cycle. Was previously never assigned — settings.js's
+// `if (window.voiceRecorderModule) ...` guard was silently a no-op.
+window.voiceRecorderModule = voiceRecorderModule;
 
 function _isMobileChatInput() {
   return window.innerWidth <= 768;
@@ -181,15 +187,33 @@ function initRailHoverLabels() {
     'rail-tasks': 'Tasks',
     'rail-theme': 'Theme',
     'rail-settings': 'Settings',
+    'rail-axoncfg': 'Axon Config',
+    'rail-axon': 'axon',
   };
   document.querySelectorAll('#icon-rail .icon-rail-btn').forEach(btn => {
-    if (btn.querySelector('.rail-hover-label')) return;
-    const label = labels[btn.id] || btn.getAttribute('aria-label') || btn.getAttribute('title') || '';
-    if (!label) return;
-    const span = document.createElement('span');
-    span.className = 'rail-hover-label';
-    span.textContent = String(label).replace(/\s*\([^)]*\)\s*/g, '').trim();
-    btn.appendChild(span);
+    let span = btn.querySelector('.rail-hover-label');
+    if (!span) {
+      const label = labels[btn.id] || btn.getAttribute('aria-label') || btn.getAttribute('title') || '';
+      if (!label) return;
+      span = document.createElement('span');
+      span.className = 'rail-hover-label';
+      span.textContent = String(label).replace(/\s*\([^)]*\)\s*/g, '').trim();
+      btn.appendChild(span);
+    }
+    if (span.dataset.railFixedBound) return;
+    span.dataset.railFixedBound = '1';
+    // .icon-rail can scroll (overflow-y:auto in style.css, once there are
+    // enough buttons to exceed the viewport height) — an absolutely
+    // positioned label would get clipped at that scroll container's edge.
+    // Recompute the trigger's real screen position on every hover and pin
+    // the label with position:fixed so it always escapes the clip, no
+    // matter how the rail is scrolled.
+    btn.addEventListener('mouseenter', () => {
+      const r = btn.getBoundingClientRect();
+      span.style.position = 'fixed';
+      span.style.left = `${r.right}px`;
+      span.style.top = `${r.top + r.height / 2}px`;
+    });
   });
 }
 
@@ -373,7 +397,7 @@ function initializeEventListeners() {
   // controls.
   window.closeAllPopups = function closeAllPopups(except) {
     document.querySelectorAll(
-      '.export-dropdown-menu.open, .overflow-menu.open, .model-picker-menu.open, .doc-overflow-menu.open'
+      '.export-dropdown-menu.open, .overflow-menu.open, .model-picker-menu.open, .doc-overflow-menu.open, .axon-flyout.open'
     ).forEach(m => { if (m !== except) m.classList.remove('open'); });
     document.querySelectorAll(
       '.skill-kebab-menu, .note-reminder-menu, .task-dropdown, .doclib-card-dropdown, .email-card-dropdown, .msg-overflow-menu'
@@ -729,6 +753,7 @@ function initializeEventListeners() {
         'rename-ai-modal': null,
         'custom-preset-modal': null,
         'memory-modal': null,
+        'term-modal': null,
       };
 
       // Dynamic modals (removed from DOM on close)
@@ -779,6 +804,7 @@ function initializeEventListeners() {
   const _modalSidebarMap = {
     'memory-modal': null,
     'theme-modal': null,
+    'term-modal': null,
   };
   const _dynamicModalIds = ['library-modal', 'archive-modal', 'doclib-modal', 'gallery-modal', 'tasks-modal'];
   function dismissModal(modal) {
@@ -1678,6 +1704,22 @@ function initializeEventListeners() {
       memoryModal.classList.remove('hidden');
       if (memoryModule && memoryModule.renderMemoryList) memoryModule.renderMemoryList();
       if (memoryModule && memoryModule.updateMemoryCount) memoryModule.updateMemoryCount();
+    });
+  }
+
+  // Sidebar Terminal button — widget que corre comandos en axon (POST /api/axon/term, streamed).
+  // Scope: contenedor del maincar, no el host — ver docs/terminal.md del repo axon.
+  const toolTermBtn = el('tool-term-btn');
+  const termModal = el('term-modal');
+  if (toolTermBtn && termModal) {
+    toolTermBtn.addEventListener('click', () => {
+      terminalModule.open();
+    });
+  }
+  const closeTermBtn = el('close-term-modal');
+  if (closeTermBtn && termModal) {
+    closeTermBtn.addEventListener('click', () => {
+      dismissModal(termModal);
     });
   }
 
@@ -3748,6 +3790,9 @@ function startOdysseusApp() {
     'rail-memory':    'tool-memory-btn',
     'rail-theme':     'tool-theme-btn',
     'rail-email':     'email-section-title',
+    'rail-axoncfg':   'tool-axoncfg-btn', // Axon Config vive en el FOOTER del rail (config, junto a Settings), no en el flyout
+    // NOTE: rail-hoststats/cortex/term were removed — esos widgets viven tras el
+    // launcher único #rail-axon + el submenú #axon-flyout de abajo.
   };
   Object.entries(_railToolMap).forEach(([railId, toolId]) => {
     const railBtn = el(railId);
@@ -3758,6 +3803,55 @@ function startOdysseusApp() {
       });
     }
   });
+
+  // axon submenu — the single #rail-axon launcher toggles a flyout listing our
+  // grouped widgets; each item delegates to its hidden sidebar tool-*-btn opener
+  // (same indirection as _railToolMap). Mirrors the .export-dropdown-menu popup:
+  // reparented to <body> so ancestor transforms don't clip it, positioned next
+  // to the rail, dismissed on outside-click (also via closeAllPopups) + Escape.
+  const _railAxonBtn = el('rail-axon');
+  const _axonFlyout = el('axon-flyout');
+  if (_railAxonBtn && _axonFlyout) {
+    const _closeAxonFlyout = () => {
+      _axonFlyout.classList.remove('open');
+      _railAxonBtn.setAttribute('aria-expanded', 'false');
+    };
+    const _openAxonFlyout = () => {
+      // Move to body so the rail's scroll/transform context can't clip it.
+      if (_axonFlyout.parentElement !== document.body) document.body.appendChild(_axonFlyout);
+      const rect = _railAxonBtn.getBoundingClientRect();
+      // Anchor to the right edge of the rail button, vertically aligned to it.
+      _axonFlyout.style.top = rect.top + 'px';
+      _axonFlyout.style.left = (rect.right + 6) + 'px';
+      _axonFlyout.style.right = 'auto';
+      _axonFlyout.classList.add('open');
+      _railAxonBtn.setAttribute('aria-expanded', 'true');
+      // Nudge back into the viewport if it would overflow the bottom edge.
+      const fr = _axonFlyout.getBoundingClientRect();
+      if (fr.bottom > window.innerHeight - 8) {
+        _axonFlyout.style.top = Math.max(8, window.innerHeight - 8 - fr.height) + 'px';
+      }
+    };
+    _railAxonBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (_axonFlyout.classList.contains('open')) _closeAxonFlyout();
+      else _openAxonFlyout();
+    });
+    // Each flyout item opens its widget via the hidden tool button, then closes.
+    _axonFlyout.querySelectorAll('.axon-flyout-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const toolBtn = el(item.dataset.tool);
+        if (toolBtn) toolBtn.click();
+        _closeAxonFlyout();
+      });
+    });
+    // Outside-click + Escape (matches the export-dropdown behaviour).
+    document.addEventListener('click', () => _closeAxonFlyout());
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && _axonFlyout.classList.contains('open')) _closeAxonFlyout();
+    });
+  }
 
   // Rail chats — click to open the completed background session
   const _railChatsBtn = el('rail-chats');
@@ -3889,16 +3983,11 @@ function startOdysseusApp() {
   // without the draft guard won and ate unsent multi-line prompts (#5862).
 
   const _sendIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
-  const _micIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>';
   const _stopIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
   const _newChatIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>';
 
   // Expose icons globally so chat.js updateSubmitButton can use them
-  window._odysseusBtnIcons = { send: _sendIcon, mic: _micIcon, stop: _stopIcon, newChat: _newChatIcon };
-
-  function _isSttEnabled() {
-    return voiceRecorderModule._sttProvider && voiceRecorderModule._sttProvider !== 'disabled';
-  }
+  window._odysseusBtnIcons = { send: _sendIcon, stop: _stopIcon, newChat: _newChatIcon };
 
   function _hasAttachments() {
     return fileHandlerModule.getPendingCount && fileHandlerModule.getPendingCount() > 0;
@@ -3910,7 +3999,7 @@ function startOdysseusApp() {
     const nextPhase = hasText ? 'queue' : 'processing';
     if (sendBtn.dataset.phase === nextPhase) return true;
     sendBtn.dataset.phase = nextPhase;
-    sendBtn.classList.remove('mic-mode', 'newchat-mode', 'newchat-expanded', 'anim-spin', 'anim-launch', 'anim-land');
+    sendBtn.classList.remove('newchat-mode', 'newchat-expanded', 'anim-spin', 'anim-launch', 'anim-land');
     if (hasText) {
       sendBtn.innerHTML = _sendIcon;
       sendBtn.title = 'Queue message';
@@ -3927,27 +4016,18 @@ function startOdysseusApp() {
       _updateStreamingSubmitButton();
       return;
     }
-    // Don't override if recording
-    if (sendBtn.dataset.mode === 'recording') return;
     const prevMode = sendBtn.dataset.mode || '';
     const hasText = messageInput && messageInput.value.trim().length > 0;
     const hasFiles = _hasAttachments();
     let newMode;
-    if (!hasText && !hasFiles && _isSttEnabled()) {
-      clearTimeout(sendBtn._collapseTimer);
-      sendBtn.innerHTML = _micIcon;
-      sendBtn.title = 'Record voice';
-      newMode = 'mic';
-      sendBtn.classList.add('mic-mode');
-      sendBtn.classList.remove('newchat-mode', 'newchat-expanded');
-    } else if (!hasText && !hasFiles && !_isSttEnabled()) {
+    if (!hasText && !hasFiles) {
       clearTimeout(sendBtn._collapseTimer);
       // Group chat: always show send button, never newchat mode
       if (groupModule && groupModule.isActive()) {
         sendBtn.innerHTML = _sendIcon;
         sendBtn.title = 'Send to group';
         newMode = 'idle';
-        sendBtn.classList.remove('mic-mode', 'newchat-mode', 'newchat-expanded');
+        sendBtn.classList.remove('newchat-mode', 'newchat-expanded');
       } else {
       // Check if we're already on a fresh empty session (welcome screen visible)
       const isEmptySession = document.getElementById('chat-container')?.classList.contains('welcome-active');
@@ -3957,14 +4037,13 @@ function startOdysseusApp() {
         sendBtn.title = 'Send message';
         newMode = 'idle';
         sendBtn.classList.add('newchat-mode'); // muted gray style
-        sendBtn.classList.remove('mic-mode', 'newchat-expanded');
+        sendBtn.classList.remove('newchat-expanded');
         clearTimeout(sendBtn._expandTimer);
       } else {
         sendBtn.innerHTML = _newChatIcon + '<span class="send-btn-label">+ New</span>';
         sendBtn.title = 'New chat';
         newMode = 'newchat';
         sendBtn.classList.add('newchat-mode');
-        sendBtn.classList.remove('mic-mode');
         // The button stays a 32px compact icon (no auto-expand to label —
         // the "+ New" label inside is for screen readers only; sighted users
         // see the spinning + on hover + the title tooltip).
@@ -3976,7 +4055,7 @@ function startOdysseusApp() {
       newMode = 'send';
       clearTimeout(sendBtn._expandTimer);
       const wasExpanded = sendBtn.classList.contains('newchat-expanded');
-      const wasNewchat = prevMode === 'newchat' || prevMode === 'mic';
+      const wasNewchat = prevMode === 'newchat';
       if (wasExpanded || wasNewchat) {
         // Collapse pill if expanded, then spin arrow in (same as + spin-in)
         if (wasExpanded) sendBtn.classList.remove('newchat-expanded');
@@ -3985,23 +4064,23 @@ function startOdysseusApp() {
           if (sendBtn.dataset.mode !== 'send') return;
           sendBtn.innerHTML = _sendIcon;
           sendBtn.title = 'Send message';
-          sendBtn.classList.remove('mic-mode', 'newchat-mode', 'anim-spin-swap');
+          sendBtn.classList.remove('newchat-mode', 'anim-spin-swap');
           sendBtn.classList.add('anim-spin');
           sendBtn.addEventListener('animationend', () => sendBtn.classList.remove('anim-spin'), { once: true });
         }, delay);
       } else {
         sendBtn.innerHTML = _sendIcon;
         sendBtn.title = 'Send message';
-        sendBtn.classList.remove('mic-mode', 'newchat-mode', 'newchat-expanded', 'anim-spin', 'anim-launch', 'anim-land');
+        sendBtn.classList.remove('newchat-mode', 'newchat-expanded', 'anim-spin', 'anim-launch', 'anim-land');
       }
     }
-    // Animate icon spin — when switching TO newchat or mic (the + or mic
-    // appearing). The previous `prevMode && ...` guard skipped this after
-    // streaming ended (dataset.mode is reset to '' there, an empty falsy
-    // string), which let the lingering anim-land class from the stop icon's
-    // entry replay on the +, making it look like the + comes from below.
+    // Animate icon spin — when switching TO newchat (the + appearing). The
+    // previous `prevMode && ...` guard skipped this after streaming ended
+    // (dataset.mode is reset to '' there, an empty falsy string), which let
+    // the lingering anim-land class from the stop icon's entry replay on the
+    // +, making it look like the + comes from below.
     // Never animate into send mode (arrow) — it should just appear instantly.
-    if (newMode !== prevMode && (newMode === 'newchat' || newMode === 'mic')) {
+    if (newMode !== prevMode && newMode === 'newchat') {
       if (!sendBtn.classList.contains('anim-spin')) {
         sendBtn.classList.remove('anim-launch', 'anim-land');
         sendBtn.classList.add('anim-spin');
@@ -4015,12 +4094,6 @@ function startOdysseusApp() {
     sendBtn.addEventListener('click', (e) => {
       e.preventDefault();
 
-      // If recording, stop recording
-      if (sendBtn.dataset.mode === 'recording' || voiceRecorderModule.getIsRecording()) {
-        voiceRecorderModule.stopRecording();
-        return;
-      }
-
       const hasText = messageInput && messageInput.value.trim().length > 0;
       const hasFiles = _hasAttachments();
 
@@ -4030,7 +4103,7 @@ function startOdysseusApp() {
         return;
       }
 
-      // New chat mode — empty input, no attachments, no STT
+      // New chat mode — empty input, no attachments
       if (!hasText && !hasFiles && sendBtn.dataset.mode === 'newchat') {
         if (sessionModule) {
           const sessions = sessionModule.getSessions();
@@ -4044,20 +4117,6 @@ function startOdysseusApp() {
             if (railNew) railNew.click();
           }
         }
-        return;
-      }
-
-      // If input is empty and STT is enabled, start recording
-      if (!hasText && !hasFiles && _isSttEnabled()) {
-        sendBtn.innerHTML = _stopIcon;
-        sendBtn.title = 'Stop recording';
-        sendBtn.dataset.mode = 'recording';
-        sendBtn.classList.add('recording');
-        voiceRecorderModule.startRecording(
-          (audioFile) => fileHandlerModule.addFiles([audioFile]),
-          uiModule.showToast,
-          uiModule.showError
-        );
         return;
       }
 
@@ -4348,6 +4407,117 @@ function startOdysseusApp() {
 	  // Ensure proper initial state
 	  voiceRecorderModule.init();
 	  if (censorModule) censorModule.init();
+
+	  // ── Dedicated composer mic button: whisper-flow style dictation ──
+	  // This is the ONLY mic control in the composer (the send-button used to
+	  // grow a mic overlay of its own when empty; that duplicate was removed —
+	  // see voiceRecorder.js's header comment). This one lives in
+	  // .chat-input-left, works even with existing text in the box, and
+	  // streams text in as the user talks instead of waiting for Stop.
+	  (function initVoiceFlowButton() {
+	    const btn = document.getElementById('voice-input-btn');
+	    if (!btn) return;
+	    const statusEl = document.getElementById('voice-flow-status');
+	    const labelEl = statusEl ? statusEl.querySelector('.voice-flow-label') : null;
+	    const interimEl = statusEl ? statusEl.querySelector('.voice-flow-interim') : null;
+	    const stopBtn = document.getElementById('voice-flow-stop-btn');
+
+	    // The "Listening…" pill is drawn over the mic button instead of over the
+	    // message text. It can't simply live next to the button
+	    // (.chat-input-left is overflow:hidden and would clip it), so it stays a
+	    // child of .chat-input-top and we hand the CSS two offsets measured off
+	    // the button. Recomputed whenever it's shown and on resize, because the
+	    // toolbar reflows (buttons collapse) as the bar narrows.
+	    const anchorHost = statusEl ? statusEl.parentElement : null;
+	    function anchorStatusToMic() {
+	      if (!statusEl || !anchorHost || statusEl.hidden) return;
+	      const micRect = btn.getBoundingClientRect();
+	      const hostRect = anchorHost.getBoundingClientRect();
+	      if (!micRect.width || !hostRect.width) {
+	        // Mic collapsed or hidden — fall back to the CSS default placement.
+	        statusEl.style.removeProperty('--voice-flow-anchor-x');
+	        statusEl.style.removeProperty('--voice-flow-anchor-bottom');
+	        return;
+	      }
+	      const x = Math.max(0, Math.round(micRect.left - hostRect.left));
+	      // Negative by construction: the toolbar row sits below
+	      // .chat-input-top. +3 centers the 22px pill on the ~28px button.
+	      const bottom = Math.round(hostRect.bottom - micRect.bottom) + 3;
+	      statusEl.style.setProperty('--voice-flow-anchor-x', x + 'px');
+	      statusEl.style.setProperty('--voice-flow-anchor-bottom', bottom + 'px');
+	    }
+	    window.addEventListener('resize', anchorStatusToMic);
+
+	    function setActiveUI(active) {
+	      btn.classList.toggle('recording', active);
+	      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+	      btn.title = active ? 'Stop dictation' : 'Dictate by voice';
+	      if (statusEl) statusEl.hidden = !active;
+	      if (!active && interimEl) interimEl.textContent = '';
+	      if (active) anchorStatusToMic();
+	    }
+
+	    function onState(state, interim) {
+	      if (labelEl) {
+	        labelEl.textContent = state === 'transcribing' ? 'Transcribing…' : 'Listening…';
+	      }
+	      if (interimEl) interimEl.textContent = interim || '';
+	      if (state === 'idle') setActiveUI(false);
+	    }
+
+	    function insertFlowText(text) {
+	      if (!messageInput || !text) return;
+	      const existing = messageInput.value;
+	      const needsSpace = existing && !/\s$/.test(existing);
+	      messageInput.value = existing + (needsSpace ? ' ' : '') + text + ' ';
+	      messageInput.dispatchEvent(new Event('input', { bubbles: true }));
+	      messageInput.focus();
+	      messageInput.selectionStart = messageInput.selectionEnd = messageInput.value.length;
+	    }
+
+	    function stop() {
+	      voiceRecorderModule.stopWhisperFlow();
+	      setActiveUI(false);
+	    }
+
+	    btn.addEventListener('click', (e) => {
+	      e.preventDefault();
+	      if (voiceRecorderModule.isWhisperFlowActive()) {
+	        stop();
+	        return;
+	      }
+	      setActiveUI(true);
+	      onState('listening', '');
+	      voiceRecorderModule.startWhisperFlow({
+	        onInsert: insertFlowText,
+	        onState,
+	        showToast: uiModule.showToast,
+	        showError: (msg) => {
+	          uiModule.showError(msg);
+	          setActiveUI(false);
+	        },
+	      });
+	    });
+
+	    if (stopBtn) {
+	      stopBtn.addEventListener('click', (e) => {
+	        e.preventDefault();
+	        e.stopPropagation();
+	        stop();
+	      });
+	    }
+
+	    // Hide the button entirely when STT is off, so we never show a
+	    // control that can't work. Kept in sync (no reload needed) via
+	    // voiceRecorder.js calling window._syncVoiceFlowAvailability on any
+	    // provider change (settings save, or the initial /api/stt/stats fetch).
+	    function syncAvailability() {
+	      const provider = voiceRecorderModule._sttProvider;
+	      btn.style.display = (provider && provider !== 'disabled') ? '' : 'none';
+	    }
+	    window._syncVoiceFlowAvailability = syncAvailability;
+	    syncAvailability();
+	  })();
 
 	  // ── Mobile pull-to-refresh for the active chat ──
 	  (function initMobileChatPullRefresh() {

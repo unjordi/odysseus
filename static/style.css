@@ -393,6 +393,38 @@ body.bg-pattern-sparkles {
       transition: background 0.1s;
     }
     .export-dropdown-item:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+    /* axon submenu flyout — grouped launcher popup off the icon rail.
+       Mirrors .export-dropdown-menu (fixed, body-appended, theme-aware). */
+    .axon-flyout {
+      display: none;
+      position: fixed;
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 8px; padding: 4px; min-width: 150px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+      z-index: 300;
+      color: var(--fg);
+    }
+    .axon-flyout.open { display: block; }
+    .axon-flyout-item {
+      all: unset;
+      box-sizing: border-box;
+      width: 100%;
+      display: flex; align-items: center; gap: 10px;
+      padding: 7px 8px; font-size: 12px; cursor: pointer;
+      border-radius: 6px; color: var(--fg); white-space: nowrap;
+      transition: background 0.1s;
+    }
+    .axon-flyout-item:hover,
+    .axon-flyout-item:focus-visible {
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
+    }
+    .axon-flyout-item svg {
+      width: 14px; height: 14px; flex-shrink: 0; opacity: 0.6;
+    }
+    @media (max-width: 768px) {
+      .axon-flyout { min-width: 200px; padding: 6px; border-radius: 10px; }
+      .axon-flyout-item { padding: 12px 14px; font-size: 14px; gap: 12px; min-height: 44px; }
+    }
     #export-compact-btn {
       justify-content: flex-start;
       gap: 10px;
@@ -652,8 +684,12 @@ body.bg-pattern-sparkles {
     #tools-section {
       margin-top: 1px;
     }
-    #tools-section .list-item {
+    #tools-section .list-item,
+    #axon-section .list-item {
       padding: 8px 8px;
+    }
+    #axon-section {
+      margin-top: 1px;
     }
     .sidebar.right-side .sidebar-header {
       justify-content: flex-start;
@@ -720,9 +756,18 @@ body.bg-pattern-sparkles {
       margin: 0;
       position: relative;
       box-sizing: border-box;
-      /* Allow hover labels (e.g. the rail-new-chat "New" tooltip) to extend
-         outside the 48px column. overflow:hidden was clipping them. */
-      overflow: visible;
+      /* With enough tool buttons the column can exceed the viewport height
+         (each is added "always visible, alphabetical" — see index.html).
+         Scroll instead of letting buttons get flex-shrunk/squished into
+         overlapping rows. Horizontal overflow stays hidden (48px is fixed
+         width); the hover labels used to rely on `overflow:visible` here to
+         escape the 48px column, but overflow-x can't be `visible` while
+         overflow-y isn't (the UA computes it to `auto` either way, which
+         still clips them) — initRailHoverLabels() in app.js repositions them
+         with `position:fixed` on hover instead, so they escape this
+         scroll container regardless of overflow. */
+      overflow-y: auto;
+      overflow-x: hidden;
     }
     body.sidebar-collapsed:not(.hamburger-only) .icon-rail,
     html.ody-sidebar-mini .icon-rail {
@@ -776,6 +821,10 @@ body.bg-pattern-sparkles {
       position: relative;
       width: 34px;
       height: 34px;
+      /* Never let the flex column squish these into ovals/overlap when the
+         rail's content is taller than its viewport — overflow-y:auto above
+         handles that instead. */
+      flex-shrink: 0;
       border: none;
       background: transparent;
       color: var(--accent, var(--red));
@@ -1175,7 +1224,13 @@ body.bg-pattern-sparkles {
     .rail-new-chat svg { transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1); }
     .rail-new-chat:hover svg { transform: rotate(90deg); }
     /* Sleek hover labels for the mini sidebar. Use a real child span instead
-       of ::before/::after so status dots and minimized indicators keep working. */
+       of ::before/::after so status dots and minimized indicators keep working.
+       Default position is absolute (relative to the button) for the very
+       first paint; initRailHoverLabels() in app.js switches it to
+       `position:fixed` (inline left/top, computed from the button's real
+       screen rect) on the first hover so it always escapes .icon-rail's
+       overflow-y:auto clipping once the rail scrolls. margin-left below still
+       applies to the fixed case (it just offsets the fixed left/top). */
     .rail-hover-label {
       position: absolute;
       left: 100%;
@@ -1201,7 +1256,7 @@ body.bg-pattern-sparkles {
     }
     #rail-admin,
     #rail-settings { color: var(--fg); }
-    .rail-separator { width: 20px; height: 1px; background: var(--border); margin: 4px auto; }
+    .rail-separator { width: 20px; height: 1px; background: var(--border); margin: 4px auto; flex-shrink: 0; }
     .rail-dynamic {
       position: relative;
     }
@@ -2524,6 +2579,77 @@ body.bg-pattern-sparkles {
 	    .plan-mode-status-toggle:hover {
 	      background: color-mix(in srgb, var(--accent, var(--red)) 30%, transparent);
 	    }
+	    /* Whisper-flow dictation indicator — a pill anchored to the mic button
+	       (#voice-input-btn), NOT to the message box: it used to sit at the
+	       bottom-left of the textarea, covering the text being read/typed.
+	       app.js measures the button and sets the two vars below; the fallback
+	       values are that old bottom-left placement and are what gets used when
+	       the mic is collapsed out of a narrow toolbar (no button to anchor to).
+	       It stays a child of .chat-input-top (position:relative, nothing
+	       clipping it) instead of moving next to the button, because
+	       .chat-input-left is overflow:hidden and would cut the pill off. */
+	    .voice-flow-status {
+	      position: absolute;
+	      left: var(--voice-flow-anchor-x, 0px);
+	      bottom: var(--voice-flow-anchor-bottom, 2px);
+	      z-index: 245;
+	      display: inline-flex;
+	      align-items: center;
+	      gap: 6px;
+	      max-width: calc(100% - var(--voice-flow-anchor-x, 0px) - 8px);
+	      height: 22px;
+	      padding: 0 6px 0 8px;
+	      border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
+	      border-radius: 999px;
+	      background: color-mix(in srgb, var(--red) 12%, var(--input-bg, var(--panel)));
+	      color: var(--red);
+	      font-size: 10px;
+	      font-weight: 700;
+	      line-height: 1;
+	    }
+	    .voice-flow-status[hidden] { display: none !important; }
+	    /* The interim text is what used to make the pill span the whole bar.
+	       Anchored to the mic it has less room, so cap it and let it ellipsize
+	       rather than push the pill across the composer. */
+	    .voice-flow-status .voice-flow-interim { max-width: 22ch; }
+	    .voice-flow-dot {
+	      width: 7px;
+	      height: 7px;
+	      border-radius: 50%;
+	      background: var(--red);
+	      flex-shrink: 0;
+	      animation: voice-flow-pulse 1.3s ease-in-out infinite;
+	    }
+	    .voice-flow-label { flex-shrink: 0; white-space: nowrap; }
+	    .voice-flow-interim {
+	      font-weight: 500;
+	      opacity: 0.7;
+	      font-style: italic;
+	      overflow: hidden;
+	      text-overflow: ellipsis;
+	      white-space: nowrap;
+	      min-width: 0;
+	    }
+	    .voice-flow-stop {
+	      display: flex;
+	      align-items: center;
+	      justify-content: center;
+	      width: 14px;
+	      height: 14px;
+	      padding: 0;
+	      border: none;
+	      border-radius: 50%;
+	      color: var(--red);
+	      background: color-mix(in srgb, var(--red) 20%, transparent);
+	      cursor: pointer;
+	      flex-shrink: 0;
+	      margin-left: 2px;
+	    }
+	    .voice-flow-stop:hover { background: color-mix(in srgb, var(--red) 32%, transparent); }
+	    @keyframes voice-flow-pulse {
+	      0%, 100% { opacity: 1; transform: scale(1); }
+	      50% { opacity: 0.4; transform: scale(0.75); }
+	    }
 	    .chat-input-top > .model-picker-wrap {
 	      position: absolute;
 	      top: 0;
@@ -2778,6 +2904,12 @@ body.bg-pattern-sparkles {
       0%, 100% { background: color-mix(in srgb, var(--red) 12%, transparent); }
       50% { background: color-mix(in srgb, var(--red) 22%, transparent); }
     }
+    /* Dedicated composer mic button (#voice-input-btn) while dictating */
+    #voice-input-btn.recording {
+      opacity: 1 !important;
+      color: var(--red);
+      animation: research-pulse 2s ease-in-out infinite;
+    }
     .tool-indicator-x {
       margin-left: 2px;
       opacity: 0.4;
@@ -2902,17 +3034,15 @@ body.bg-pattern-sparkles {
       background: var(--send-btn-hover, color-mix(in srgb, var(--red) 80%, white));
       color: #fff;
     }
-    .send-btn.mic-mode,
     .send-btn.newchat-mode {
-      /* Idle / new-chat / mic states blend the picked Send Btn color into
-         the panel so the user's color choice is visible across every state,
+      /* Idle / new-chat states blend the picked Send Btn color into the
+         panel so the user's color choice is visible across every state,
          not only briefly while typing. */
       background: color-mix(in srgb, var(--send-btn-bg, var(--red)) 30%, var(--panel, #2a2a2a));
       color: var(--fg);
       border: 1px solid var(--border);
       transition: width 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.25s, border-color 0.25s, color 0.25s, border-radius 0.3s;
     }
-    .send-btn.mic-mode:hover,
     .send-btn.newchat-mode:hover {
       background: color-mix(in srgb, var(--send-btn-hover, var(--send-btn-bg, var(--red))) 85%, var(--panel, #2a2a2a));
       color: #fff;
@@ -2951,16 +3081,6 @@ body.bg-pattern-sparkles {
     .send-btn.newchat-expanded {
       width: 68px;
       padding: 0 10px 0 8px;
-    }
-    .send-btn.recording {
-      background: var(--red) !important;
-      color: #fff !important;
-      border: none !important;
-      animation: pulse-recording 1.5s infinite;
-    }
-    @keyframes pulse-recording {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.7; }
     }
     /* Mode toggle — Agent / Chat */
     .mode-toggle {
@@ -3219,7 +3339,17 @@ body.bg-pattern-sparkles {
       color: var(--fg);
     }
     .model-picker-btn #model-picker-label {
-      max-width: 120px;
+      /* Content-width, capped — never a fixed width, or the next long model
+         name breaks it again. The label is already sized by its content
+         (inline-flex button); this only bounds it.
+         The cap follows the CHAT BAR (cqi = 1% of the .chat-input-bar
+         container's inline size), not the viewport: the picker is absolutely
+         positioned inside the bar, so the bar's width is what it can actually
+         spend, and the bar can be a split pane far narrower than the window.
+         Floor 140px fits the real names — "gpt-oss-120b", "claude-opus-5",
+         "qwen2.5vl:7b" — even in a narrow bar; the ellipsis stays for the
+         pathological ones (Anthropic's date-suffixed ids). */
+      max-width: clamp(140px, 45cqi, 360px);
       overflow: hidden;
       text-overflow: ellipsis;
     }
@@ -4434,6 +4564,48 @@ body.bg-pattern-sparkles {
        panel AND the document panel (doc-run-output reuses the same children). */
     .code-runner-output,
     .doc-run-output { padding-right: 110px; }
+
+    /* Terminal widget (rail-term / tool-term-btn → #term-modal). Wider/taller than the default
+       .modal-content — a shell wants room — mirroring #cookbook-modal's own size override. */
+    #term-modal .modal-content {
+      width:min(760px, 92vw);
+      height:min(560px, 82vh);
+      max-height:82vh;
+    }
+    .term-scope-badge {
+      font-size:0.65em; font-weight:600; letter-spacing:0.02em; text-transform:uppercase;
+      opacity:0.6; border:1px solid var(--border); border-radius:4px;
+      padding:1px 5px; margin-left:6px; vertical-align:1px; cursor:help;
+    }
+    /* host = corre en tu compu (broker), no en el contenedor — acento distinto para que salte a la vista */
+    .term-scope-badge.host { opacity:0.9; color:var(--green); border-color:var(--green); }
+    .term-modal-body { flex:1; display:flex; flex-direction:column; min-height:0; gap:8px; }
+    .term-output {
+      flex:1; margin:0; padding:8px 10px;
+      overflow-y:auto; overflow-x:auto;
+      background:var(--bg); border:1px solid var(--border); border-radius:6px;
+      font-family:'Fira Code', 'Courier New', monospace;
+      font-size:0.85em; line-height:1.5;
+      white-space:pre-wrap; word-break:break-word;
+      color:var(--fg);
+    }
+    .term-output .term-stderr { color:var(--red); }
+    .term-output .term-cmd { color:var(--hl-function, #61afef); font-weight:600; }
+    .term-output .term-exit { opacity:0.6; font-style:italic; }
+    .term-input-row { display:flex; align-items:center; gap:6px; flex-shrink:0; }
+    .term-prompt { font-family:'Fira Code', 'Courier New', monospace; opacity:0.6; flex-shrink:0; }
+    .term-input {
+      flex:1; min-width:0;
+      font-family:'Fira Code', 'Courier New', monospace; font-size:0.9em;
+      background:var(--input-bg, var(--panel)); color:var(--fg);
+      border:1px solid var(--border); border-radius:6px; padding:6px 8px;
+    }
+    .term-run-btn, .term-stop-btn {
+      flex-shrink:0; font-size:12px; padding:6px 12px; border-radius:6px;
+      border:1px solid var(--border); background:var(--panel); color:var(--fg); cursor:pointer;
+    }
+    .term-run-btn:hover, .term-stop-btn:hover { border-color:var(--accent-primary, var(--red)); color:var(--accent-primary, var(--red)); }
+    .term-stop-btn { border-color:var(--red); color:var(--red); }
 
     .toast {
       position:fixed;
@@ -41399,3 +41571,639 @@ body.settings-sidebar-resize-active {
     display: none;
   }
 }
+
+/* ============================================================
+   HOST STATS panel — reactor-console host hardware monitor.
+   Dionysus-reactor look (bracketed [ LABELS ], segmented bars,
+   monospace) painted with Odysseus theme tokens so it stays
+   native and honors the active light/dark theme.
+   ============================================================ */
+.hoststats-content {
+  width: min(560px, 94vw);
+  max-height: 88vh;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+}
+
+/* ============================================================
+   AXON CONFIG panel — configura el cerebro (modelo local) y el modo de axon.
+   Look de panel nativo (no reactor-console): mismos tokens de tema que el
+   resto del fork (--fg/--bg/--panel/--border/--accent-*), así respeta
+   claro/oscuro sin CSS aparte por tema.
+   ============================================================ */
+.axoncfg-content {
+  width: min(420px, 92vw);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+}
+.hoststats-header { align-items: center; }
+.hoststats-header h4 { color: var(--fg); }
+.hoststats-header-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+
+/* Full ⇄ Compact view toggle */
+.hs-mode-switch {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+  font-family: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+}
+.hs-mode-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  opacity: 0.6;
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+.hs-mode-btn + .hs-mode-btn { border-left: 1px solid var(--border); }
+.hs-mode-btn:hover { opacity: 0.9; }
+.hs-mode-btn.active {
+  opacity: 1;
+  color: var(--accent-primary, var(--fg));
+  background: color-mix(in srgb, var(--accent-primary, var(--fg)) 14%, transparent);
+}
+.hoststats-live-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--accent-primary, var(--fg));
+  box-shadow: 0 0 6px var(--accent-primary, var(--fg));
+  animation: hs-pulse 1.5s ease-in-out infinite;
+}
+.hoststats-live-dot.stale { background: var(--red, #e06c75); box-shadow: none; animation: none; }
+@keyframes hs-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.hoststats-body {
+  font-family: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+  color: var(--fg);
+  padding: 14px 16px 16px;
+  overflow-y: auto;
+}
+.hoststats-loading, .hs-empty {
+  color: var(--fg);
+  opacity: 0.75;
+  letter-spacing: 1px;
+  padding: 10px 2px;
+  font-size: 12px;
+}
+.hs-empty { border: 1px dashed var(--border); border-radius: 4px; margin-bottom: 10px; padding: 8px 10px; }
+
+.hs-section-label {
+  color: var(--accent-primary, var(--fg));
+  letter-spacing: 2px;
+  font-size: 11px;
+  text-transform: uppercase;
+  margin: 14px 0 8px;
+  opacity: 0.85;
+}
+.hs-section-label:first-child { margin-top: 0; }
+
+/* GPU cards */
+.hs-gpu-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+@media (min-width: 460px) { .hs-gpu-grid { grid-template-columns: 1fr 1fr; } }
+.hs-gpu {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 10px 11px 11px;
+  background: linear-gradient(to top, color-mix(in srgb, var(--panel) 45%, transparent), transparent);
+  min-width: 0; /* let grid items shrink so the 2-col layout never overflows */
+}
+.hs-gpu-title {
+  color: var(--fg);
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  margin-bottom: 9px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hs-metric { margin-bottom: 9px; }
+.hs-metric:last-child { margin-bottom: 0; }
+.hs-metric-head {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+  font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+  color: var(--fg); opacity: 0.8; margin-bottom: 4px;
+  min-width: 0;
+}
+.hs-metric-head > span:first-child { flex-shrink: 0; }
+.hs-metric-num { opacity: 1; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Segmented bar */
+.hs-bar { display: flex; gap: 2px; height: 14px; }
+.hs-seg {
+  flex: 1;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+}
+.hs-seg.on {
+  background: var(--accent-primary, var(--fg));
+  border-color: var(--accent-primary, var(--fg));
+  box-shadow: 0 0 4px color-mix(in srgb, var(--accent-primary, var(--fg)) 55%, transparent);
+}
+.hs-warn .hs-seg.on { background: var(--accent-warm, #d19a66); border-color: var(--accent-warm, #d19a66); box-shadow: 0 0 4px color-mix(in srgb, var(--accent-warm, #d19a66) 55%, transparent); }
+.hs-hot .hs-seg.on  { background: var(--red, #e06c75); border-color: var(--red, #e06c75); box-shadow: 0 0 5px color-mix(in srgb, var(--red, #e06c75) 60%, transparent); }
+.hs-bar-na .hs-seg { opacity: 0.4; }
+
+/* Temp read-out (big) */
+.hs-metric-temp .hs-metric-head { margin-bottom: 2px; }
+.hs-temp-read { font-size: 20px; font-weight: 600; letter-spacing: 1px; font-variant-numeric: tabular-nums; }
+.hs-ok { color: var(--fg); }
+.hs-warn.hs-temp-read, .hs-temp-read.hs-warn { color: var(--accent-warm, #d19a66); }
+.hs-hot.hs-temp-read, .hs-temp-read.hs-hot { color: var(--red, #e06c75); }
+
+/* Model loaded */
+.hs-models { display: flex; flex-direction: column; gap: 6px; }
+.hs-model {
+  border: 1px solid var(--border); border-radius: 4px; padding: 7px 10px;
+  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+}
+.hs-model-name { color: var(--fg); font-size: 12px; }
+.hs-model-meta { color: var(--fg); opacity: 0.65; font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* System (CPU + RAM) */
+.hs-sys { display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--border); border-radius: 5px; padding: 11px; }
+
+/* Footer */
+.hs-foot {
+  margin-top: 14px; padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  font-size: 10px; letter-spacing: 1px; color: var(--fg); opacity: 0.6;
+  display: flex; justify-content: space-between;
+}
+.hs-foot-ts { opacity: 0.8; }
+
+/* ── Compact mode ──
+   Same card language as full (border, segmented bar, hs-ok/warn/hot tone
+   classes) shrunk into a single-row strip of mini-chips — a condensed form
+   factor, not a different look. "dionysus stats" label kept as homage. */
+.hoststats-compact {
+  font-family: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+  padding: 12px 16px 14px;
+}
+.hs-compact-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.hsc-title {
+  color: var(--accent-primary, var(--fg));
+  letter-spacing: 1.5px;
+  font-size: 10px;
+  text-transform: uppercase;
+  opacity: 0.85;
+  white-space: nowrap;
+  margin-right: 2px;
+}
+.hsc-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 4px 8px;
+  background: linear-gradient(to top, color-mix(in srgb, var(--panel) 45%, transparent), transparent);
+}
+.hsc-chip-label {
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--fg);
+  opacity: 0.75;
+  white-space: nowrap;
+}
+.hsc-chip-bar .hs-bar {
+  height: 10px;
+  gap: 1px;
+  width: 60px;
+}
+.hsc-chip-val {
+  font-size: 11px;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.hsc-chip-val.hs-warn { color: var(--accent-warm, #d19a66); }
+.hsc-chip-val.hs-hot { color: var(--red, #e06c75); }
+.hsc-chip-na { opacity: 0.6; }
+
+/* Compact mode: the whole panel collapses to just its title bar, with the stat
+   chips rendered inline in the header. No body — the bar IS the panel. */
+.hoststats-content.hs-mode-compact {
+  width: auto;
+  max-width: 96vw;
+  height: auto !important;   /* beat any saved/dragged height so the bar hugs its content */
+  min-height: 0 !important;
+}
+.hoststats-content.hs-mode-compact #hoststats-body { display: none; }
+.hoststats-content.hs-mode-compact .hoststats-header h4 { display: none; }
+.hoststats-content.hs-mode-compact .hs-compact-row { flex: 1 1 auto; flex-wrap: nowrap; }
+/* The in-header compact strip only exists in compact mode; hide it in full. */
+.hoststats-content:not(.hs-mode-compact) #hoststats-compact-row { display: none; }
+
+/* Docked compact: pins to the bottom edge like a status bar, and the chat
+   composer reserves room above it so they never overlap/hide each other.
+   `body.hoststats-compact-docked` is set by hostStats.js while compact + open;
+   `--hoststats-dock-h` is the measured bar height. The !important beats the
+   inline position the drag gesture may have left on the content.
+   `left` reserves the icon rail / wide sidebar strip (whichever is
+   currently visible) via the same `--icon-rail-w` / `--sidebar-w` live vars
+   the fullscreen tool panels use (see the #calendar-modal etc. block above)
+   — so the bar never covers the sidebar/rail across its collapsed, resized,
+   mini or off states. */
+body.hoststats-compact-docked #hoststats-modal .hoststats-content.hs-mode-compact {
+  position: fixed !important;
+  left: calc(var(--icon-rail-w, 48px) + var(--sidebar-w, 0px)) !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  top: auto !important;
+  transform: none !important;
+  width: auto !important;
+  max-width: none !important;
+  border-radius: 0 !important;
+  border-left: 0; border-right: 0; border-bottom: 0;
+  transition: left 0.25s ease;
+}
+body.hoststats-compact-docked .chat-input-bar {
+  margin-bottom: var(--hoststats-dock-h, 48px);
+}
+
+/* Host Stats sits above other tool windows like Cookbook does. */
+#hoststats-modal { z-index: 262; }
+.axoncfg-body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.axoncfg-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.axoncfg-row label {
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  color: var(--fg);
+  opacity: 0.75;
+}
+.axoncfg-row select {
+  width: 100%;
+}
+.axoncfg-ollama {
+  font-size: 11px;
+  color: var(--fg);
+  opacity: 0.6;
+}
+.axoncfg-status {
+  font-size: 12px;
+  min-height: 1.4em;
+  color: var(--accent-primary, var(--fg));
+}
+.axoncfg-status-error {
+  color: var(--red, #e06c75);
+}
+
+/* ============================================================
+   CLAUDE · CORTEX panel — estado de la ventana de 5h de Claude en el HOST.
+   Mismo lenguaje visual que Host Stats (reactor-console: [ LABELS ], barra
+   segmentada hs-bar/hs-seg compartida, monospace) pintado con los tokens de
+   tema del fork, así respeta claro/oscuro sin CSS aparte por tema.
+   ============================================================ */
+.cortex-content {
+  width: min(560px, 94vw);
+  max-height: 88vh;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+}
+.cortex-header-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+
+/* Sidebar (rail) + panel — réplica del layout del plasmoid real (riel de pestañas a la
+   izquierda, contenido scrolleable a la derecha). El riel es ESTÁTICO (vive en index.html,
+   fuera de #cortex-body) — solo el panel se re-renderiza en cada poll/cambio de pestaña. */
+.cortex-layout {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0; /* deja que #cortex-body scrollee en vez de estirar el modal */
+}
+.cortex-rail {
+  flex: 0 0 92px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 6px;
+  border-right: 1px solid var(--border);
+  background: color-mix(in srgb, var(--panel, var(--bg)) 60%, transparent);
+  overflow-y: auto;
+}
+.cortex-rail-btn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-family: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.3px;
+  border-radius: 5px;
+  padding: 7px 4px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  opacity: 0.75;
+}
+.cortex-rail-btn:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); opacity: 0.95; }
+.cortex-rail-btn.active {
+  background: color-mix(in srgb, var(--accent-primary, #e8884a) 18%, transparent);
+  color: var(--accent-primary, #e8884a);
+  font-weight: 600;
+  opacity: 1;
+}
+.cortex-rail-btn span { line-height: 1.1; }
+
+.cortex-body {
+  flex: 1 1 auto;
+  font-family: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace;
+  color: var(--fg);
+  padding: 14px 16px 16px;
+  overflow-y: auto;
+  min-width: 0;
+}
+/* Una "sección de límite" (Sesión 5h / Semanal 7d / por-modelo / Gasto real):
+   título+% arriba, barra segmentada (hs-bar/hs-seg compartida con Host Stats)
+   debajo, caption de reset/$equiv al pie. Espeja UsageSection/SpendSection
+   del plasmoid KDE real (cortex/src/plasmoid/contents/ui/main.qml). */
+.cortex-usage { margin-bottom: 14px; }
+.cortex-usage:last-child { margin-bottom: 0; }
+.cortex-usage-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+  margin-bottom: 6px;
+}
+.cortex-usage-caption {
+  margin-top: 6px;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  color: var(--fg);
+  opacity: 0.65;
+}
+.cortex-usage-caption-multiline { white-space: pre-line; }
+
+/* % / $ headline — orange (accent) por default, rojo solo si pctColor lo marca
+   'hot' (>90%, throttle). Misma semántica binaria que pctColor() en el QML. */
+.cortex-pct { color: var(--accent-primary, var(--fg)); font-variant-numeric: tabular-nums; }
+.cortex-pct.hs-hot { color: var(--red, #e06c75); }
+
+.cortex-foot {
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  font-size: 10px;
+  letter-spacing: 0.5px;
+  color: var(--fg);
+  opacity: 0.6;
+}
+.cortex-foot-warn { opacity: 1; font-weight: 600; color: var(--red, #e06c75); }
+
+/* ── Resumen / Cerebro: grid de tarjetas de stat (StatCard del QML) ── */
+.cortex-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.cortex-stat-card {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 8px 9px;
+  background: color-mix(in srgb, var(--panel, var(--fg)) 6%, transparent);
+  min-width: 0;
+}
+.cortex-stat-label {
+  font-size: 9px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  opacity: 0.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cortex-stat-value {
+  font-size: 14px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Resumen: heatmap tipo GitHub (actividad diaria) ── */
+.cortex-heatmap {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(7, 10px);
+  gap: 3px;
+  overflow-x: auto;
+  padding-bottom: 10px;
+  margin-bottom: 4px;
+}
+.cortex-heat-cell { width: 10px; height: 10px; border-radius: 2px; }
+
+/* ── Modelos / Proyectos: gráfica apilada por día + lista ── */
+.cortex-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 84px;
+  margin-bottom: 12px;
+}
+.cortex-chart-col {
+  flex: 1 1 auto;
+  min-width: 2px;
+  height: 100%;
+  display: flex;
+  flex-direction: column-reverse;
+}
+.cortex-chart-seg { width: 100%; }
+
+.cortex-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.cortex-list-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+.cortex-swatch { width: 10px; height: 10px; border-radius: 2px; flex: 0 0 auto; align-self: center; }
+.cortex-list-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 9em;
+}
+.cortex-list-meta { flex: 1 1 auto; opacity: 0.7; font-size: 11px; text-align: right; white-space: nowrap; }
+.cortex-list-pct { font-weight: 700; min-width: 3.2em; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ── Proyectos: fila expandible con sesiones (read-only — sin resume/rename,
+   eso es una acción de escritorio que no aplica dentro de Odysseus) ── */
+.cortex-proj-row { cursor: default; }
+.cortex-proj-chevron { opacity: 0.5; font-size: 10px; }
+.cortex-proj-sessions { display: flex; flex-direction: column; gap: 3px; margin: 2px 0 6px 18px; }
+.cortex-proj-session {
+  display: flex; align-items: baseline; gap: 6px; font-size: 11px; opacity: 0.85;
+}
+.cortex-proj-session-dot { color: var(--accent-primary, #e8884a); }
+.cortex-proj-session-label { flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cortex-proj-session-date { opacity: 0.6; font-size: 10px; }
+
+/* ── Chats ── */
+.cortex-divider { height: 1px; background: color-mix(in srgb, var(--border) 60%, transparent); margin: 8px 0; }
+.cortex-list-caption { font-size: 10px; opacity: 0.5; margin-bottom: 6px; }
+.cortex-chat-row { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 2px 0; }
+.cortex-chat-title { flex: 1 1 auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cortex-chat-badge { border-radius: 8px; padding: 1px 7px; font-size: 10px; font-weight: 700; white-space: nowrap; }
+.cortex-chat-date { opacity: 0.6; font-size: 10px; white-space: nowrap; }
+
+/* ── Cerebro: lista de puntos (hooks cableados / skills instalados) ── */
+.cortex-dot-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.cortex-dot-row { display: flex; align-items: baseline; gap: 7px; font-size: 11px; }
+.cortex-dot { color: #3aa76d; opacity: 0.7; }
+.cortex-dot-name { font-family: ui-monospace, "SFMono-Regular", "JetBrains Mono", Menlo, Consolas, monospace; }
+.cortex-link { color: var(--accent-primary, var(--fg)); text-decoration: none; }
+.cortex-link:hover { text-decoration: underline; }
+
+/* ── Footer de rango {hoy·7d·30d·∞}, compartido por Resumen/Modelos/Proyectos/Chats
+   (RangeFooter del QML) ── */
+.cortex-range-footer { display: flex; gap: 4px; margin-top: 6px; }
+.cortex-range-pill {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg);
+  opacity: 0.7;
+  font-family: inherit;
+  font-size: 10px;
+  letter-spacing: 0.3px;
+  border-radius: 10px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+.cortex-range-pill:hover { opacity: 0.95; }
+.cortex-range-pill.active {
+  border-color: var(--accent-primary, #e8884a);
+  color: var(--accent-primary, #e8884a);
+  background: color-mix(in srgb, var(--accent-primary, #e8884a) 16%, transparent);
+  opacity: 1;
+  font-weight: 600;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────────────────────
+   Añade esto a static/style.css (o a un <style>). Da tamaño concreto al contenedor del emulador para
+   que el widget pueda medir cols/rows. El resto del look del terminal lo trae xterm.css (vendored).
+   ───────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* El body del modal es una columna que llena el alto disponible; el emulador toma todo el espacio. */
+.term-modal-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;            /* deja que el hijo con overflow encoja dentro del flex */
+  height: 60vh;            /* alto por defecto del modal de terminal (ajústalo a tu layout) */
+}
+
+/* Nerd Font de la terminal (MesloLGSDZ Nerd Font MONO) — self-hosted en /static/lib/fonts (CSP 'self', sin CDN).
+   Variante MONO (ancho fijo): los glifos Nerd/powerline caben en UNA celda → sin desfase del prompt ni clip
+   del 1er ícono (la no-Mono los rendea más anchos que la celda y desalinea). La usa xterm.js (fontFamily). */
+@font-face {
+  font-family: 'MesloLGSDZ Nerd Font Mono';
+  font-weight: 400; font-style: normal; font-display: swap;
+  src: url('/static/lib/fonts/MesloLGSDZNerdFontMono-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'MesloLGSDZ Nerd Font Mono';
+  font-weight: 700; font-style: normal; font-display: swap;
+  src: url('/static/lib/fonts/MesloLGSDZNerdFontMono-Bold.woff2') format('woff2');
+}
+
+/* Contenedor del emulador xterm.js (modo PTY). Debe tener tamaño concreto ANTES de medir cols/rows. */
+#term-xterm.term-xterm {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  padding: 6px 8px;
+  box-sizing: border-box;
+  background: #1e1e2e;      /* calza con el theme.background de xterm en terminal.js */
+  overflow: hidden;         /* xterm maneja su propio scroll interno; nada asoma fuera del contenedor */
+}
+
+/* xterm posee AMBAS dimensiones: renderiza a cols*cellWidth × rows*cellHeight (múltiplos EXACTOS de celda),
+   así ni la última fila ni la última columna quedan a medias. Forzar width/height:100% estiraba la rejilla
+   más allá del múltiplo exacto → filas/columnas parciales. `terminal.js` mide el contenedor y fija cols/rows;
+   xterm rendea exacto y el sobrante (hasta ~1 celda + el gutter de la barra) muestra el fondo #1e1e2e, limpio.
+   NO volver a poner `#term-xterm .xterm { width/height: 100% !important }`. */
+
+/* Scrollbar SOLO cuando de verdad hay overflow. xterm.css fuerza overflow-y:scroll (barra siempre visible)
+   → lo bajamos a auto: sin scrollback que quepa, no hay barra.
+   `scrollbar-gutter: stable` reserva su carril SIEMPRE, aparezca o no la barra: así el ancho útil del texto
+   es CONSTANTE y `terminal.js` calcula las mismas cols en los dos estados. Sin esto la rejilla oscilaría
+   (sin barra → cabe una columna más → aparece la barra → la última columna queda tapada). */
+#term-xterm .xterm-viewport {
+  overflow-y: auto !important;
+  scrollbar-gutter: stable;
+  background-color: transparent !important;  /* xterm.css la ponía #000; deja ver el theme */
+  scrollbar-width: thin;                      /* Firefox: barra delgada */
+  scrollbar-color: rgba(205, 214, 244, 0.28) transparent;
+}
+/* WebKit/Blink: barra fina, overlay, discreta; el track transparente. */
+#term-xterm .xterm-viewport::-webkit-scrollbar { width: 8px; height: 8px; }
+#term-xterm .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
+#term-xterm .xterm-viewport::-webkit-scrollbar-thumb {
+  background: rgba(205, 214, 244, 0.24);
+  border-radius: 4px;
+}
+#term-xterm .xterm-viewport:hover::-webkit-scrollbar-thumb { background: rgba(205, 214, 244, 0.4); }
+
+/* Alt-screen (vim/top/claude TUI): sin scrollback → jamás scrollbar, área limpia como en la TUI real.
+   El gutter se CONSERVA (`stable`) a propósito: si se quitara, el ancho útil cambiaría al entrar/salir de la
+   alt-screen y la rejilla se recalcularía a media sesión de vim. */
+#term-xterm.term-alt-screen .xterm-viewport {
+  overflow-y: hidden !important;
+  scrollbar-width: none;
+}
+#term-xterm.term-alt-screen .xterm-viewport::-webkit-scrollbar { display: none; }
+
+/* Modo one-shot degradado: se comporta como el layout anterior (columna con <pre> + fila de input). */
+#term-oneshot.term-oneshot {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+#term-oneshot .term-output { flex: 1 1 auto; overflow: auto; min-height: 0; }
+
+/* Utilidad: respeta el hidden aunque el contenedor sea flex. */
+#term-xterm.hidden,
+#term-oneshot.hidden { display: none !important; }
+
