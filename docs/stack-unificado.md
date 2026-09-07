@@ -51,6 +51,70 @@ git -C ~/code/axon rev-parse --short origin/develop        # lo que está INTEGR
 
 Si difieren, `./levantar-stack.sh` los iguala. Antes de esto, esa pregunta no tenía respuesta.
 
+## El CD de axon entra **por este script**, no por un contenedor suelto
+
+El repo de axon tiene un CD (`axon/.github/workflows/deploy-axon.yml`) que dispara en cada push a
+`develop`: un job en runner cloud buildea y publica la imagen en Docker Hub, y un segundo job, en el
+runner self-hosted de la Cachy, actualiza lo que corre aquí.
+
+**Lo que hacía antes** (y por qué se cambió): ese segundo job corría `axon/scripts/run-maincar-docker.sh`,
+un `docker run -d --name axon-maincar -p 7001:7001 --network odysseus_default …`. Un contenedor **fuera
+del proyecto de compose**: no sale en `docker compose ps`, no lo recrea `levantar-stack.sh`, y **pelea
+por `:7001`** con el servicio `axon` de este stack. En cuanto el stack unificado entró a `develop`, los
+dos no podían coexistir — y el job murió cuatro corridas seguidas con
+`failed to bind host port 0.0.0.0:7001/tcp: address already in use`, exit 125.
+
+**Lo que hace ahora:** el job llama a `axon/scripts/deploy-al-stack.sh`, que es un envoltorio delgado
+sobre **este** script:
+
+```bash
+AXON_IMAGE_TAG=<sha-corto> ./levantar-stack.sh --sin-publicar --solo-axon
+```
+
+Las dos banderas nuevas, y por qué existen:
+
+| bandera | qué hace | por qué |
+|---|---|---|
+| `--sin-publicar` | salta el paso 1/2 (`publish-axon.sh`) y consume el `AXON_IMAGE_TAG` que le den | el job de cloud **ya** buildeó esa imagen desde el commit que disparó el deploy. Re-buildear aquí duplicaría minutos en la máquina que además sirve el stack y —peor— construiría desde el `origin/develop` de *este* host, que puede no estar fetcheado y ser **otro commit** |
+| `--solo-axon` | `up -d --no-deps axon`: recrea **solo** ese servicio | un deploy de axon no debe recrear Odysseus ni a sus vecinos. `--no-deps` es seguro porque el preflight comprueba el estado **real**: si `odysseus` no corre, no despliega |
+
+Sin `--sin-publicar`, `AXON_IMAGE_TAG` se sigue calculando como siempre (el sha corto de `origin/develop`
+que deja `publish-axon.sh`): **el uso manual de `./levantar-stack.sh` no cambia en nada.**
+
+### Si el stack no está arriba, el CD **no lo levanta**: falla y dice qué correr
+
+Es una decisión, no un hueco. Levantar el stack completo desde un push de código significaría arrancar
+Ollama (34 GB de pesos), TTS, SearXNG, ChromaDB y ntfy —y, sobre todo, **tomar decisiones de
+infraestructura que el preflight de este script deja a un humano a propósito**: masquear el
+`ollama.service` nativo, liberar `:11434`. Un CD que provisiona infra a espaldas del operador es cómo se
+rompe una máquina de madrugada. La alternativa —recrear axon con `--no-deps` sobre un stack caído— deja
+la **puerta de un edificio vacío**: axon arriba proxeando a la nada, 502 en el primer page-load y cara de
+bug de axon.
+
+Así que el preflight de `--solo-axon` exige que el servicio `odysseus` esté **corriendo**; si no, para con
+el mensaje `Levanta el stack tú (es deliberado, no automático): ./levantar-stack.sh`. Que `ollama` falte
+es solo un **aviso** (axon sirve la puerta, pierde el cerebro local), no un fatal.
+
+### Dos cosas más que cambiaron en el reporte
+
+- **El chequeo de drift compara contra el tag desplegado**, no contra el `origin/develop` de este host.
+  En modo normal son el mismo valor por construcción, así que no se pierde nada; en modo CD el
+  `origin/develop` local puede estar sin fetchear y reportaría un **drift falso** en cada corrida. De
+  paso, comparar contra el tag caza algo que la otra comparación no: que el contenedor **de verdad se
+  recreó** con la imagen nueva.
+- **En `--solo-axon` el script sale con código ≠ 0 si axon no quedó verde.** En modo interactivo se
+  conserva el `exit 0` de siempre (el humano está leyendo la tabla). Pero quien lee el modo CD es GitHub
+  Actions, y un job **verde sobre un despliegue que no quedó** es peor que no tener CD: es el drift
+  invisible con un ✅ encima. También se saltan los dos smokes caros (síntesis de TTS, búsqueda real de
+  SearXNG): son de servicios que este modo no recrea, y correrlos en cada push es pagar dos veces por
+  algo que no se tocó.
+
+### El contenedor viejo `axon-maincar` ahora **para** el despliegue
+
+El preflight ya avisaba de él; ahora distingue: **parado** es basura (aviso), **corriendo** es un fatal
+con el comando exacto (`docker rm -f axon-maincar`). Es el fallo que tumbó las cuatro corridas del CD, y
+el error crudo de Docker (`address already in use`) no dice ni qué lo ocupa ni qué borrar.
+
 ## Red: quién alcanza a quién
 
 - **axon → Odysseus:** `http://odysseus:7000`, por la red interna del proyecto. **Es la única vía**:
@@ -470,3 +534,9 @@ sin cargar modelos). Las **seis** combinaciones de overlays validan con `docker 
    es escribible con ese uid.
 8. **Que `/api/axon/version` reporte el sha de develop**, no `desconocido` (ahora lo compara el script solo).
 9. **La terminal del widget** sigue dando shell del host (requiere `AXON_TERM_BROKER_TOKEN` en el `.env`).
+10. **El CD entero (`--sin-publicar --solo-axon`)**, y esto solo se prueba de una forma: **con un push a
+    `develop` de axon**. Lo que sí está comprobado sin mutar nada es que las seis combinaciones de
+    banderas siguen resolviendo con `docker compose config`, que el modo CD resuelve
+    `image: potenciaindustrial/axon:<tag>` (única línea que cambia contra el modo normal) y que los
+    preflight nuevos fallan con su mensaje y su exit code. Lo que **no** se ha ejercitado nunca: el
+    `up -d --no-deps axon` real, el reporte de salud acotado a un servicio y el exit≠0 del job.
