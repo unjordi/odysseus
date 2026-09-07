@@ -95,11 +95,35 @@ services:
     mem_limit: 2g
     mem_reservation: 512m
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; urllib.request.urlopen('http://localhost:8880/health', timeout=5)"]
+      # QUÉ SIGNIFICA LISTO PARA EL TTS — y hasta dónde puede llegar un healthcheck honesto.
+      #
+      # `/health` solo dice "el proceso HTTP contesta". Para Kokoro eso es MENOS de lo que necesitamos:
+      # el paquete de voces se carga en el lifespan (`initialize_with_warmup()`), y un contenedor que
+      # levantó FastAPI pero no tiene voces es un TTS mudo que se ve sano. Por eso el probe es
+      # `/v1/audio/voices` y además EXIGE que la lista NO esté vacía (verificado en vivo: 200, 785 B,
+      # 13 ms, ~50 voces, sin síntesis). Es estrictamente más fuerte que `/health` al mismo precio.
+      #
+      # ⚠️ LO QUE ESTE HEALTHCHECK **NO** PUEDE PROBAR — y hay que decirlo:
+      # el fallo de Blackwell (sm_120) que documenta el comentario de la imagen, arriba —
+      # "CUDA error: no kernel image is available for execution on the device"— es un fallo de INFERENCIA.
+      # Con la imagen GPU en una GPU no soportada, `/health` y `/v1/audio/voices` pueden seguir
+      # contestando 200 mientras CADA síntesis revienta: exactamente el "el contenedor está arriba" ≠
+      # "el TTS funciona". Distinguirlo exige SINTETIZAR, y sintetizar cada `interval` para siempre es
+      # justo lo que un healthcheck no debe hacer (carga el modelo, quema CPU/GPU, escribe audio).
+      # ⇒ La distinción se hace UNA vez, no en bucle: `levantar-stack.sh` corre al final un smoke real
+      #   de `/v1/audio/speech` (una palabra) y REPORTA si el motor sintetiza de verdad. Ese es el lugar
+      #   correcto para un chequeo caro: una vez por despliegue, no cada 30 segundos.
+      # (No verificado en esta pasada: no se levantó la imagen GPU — el stack corre la CPU por default.)
+      test: ["CMD", "python", "-c", "import json,urllib.request,sys; d=json.load(urllib.request.urlopen('http://localhost:8880/v1/audio/voices', timeout=5)); sys.exit(0 if d.get('voices') else 1)"]
+      # interval 30s: NADIE depende del TTS (ver el grafo en docs/stack-unificado.md) — su salud es
+      # informativa, no gatea el arranque de nadie. No hace falta medirla seguido.
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 90s   # first boot downloads weights
+      # 90 s NO es un default: el PRIMER boot descarga los ~330 MB de pesos Kokoro desde HuggingFace
+      # (dependencia de red). En los boots siguientes el volumen nombrado `tts_models` ya los tiene y el
+      # arranque es una lectura local — el contenedor vivo hoy está `healthy` con esta misma cifra.
+      start_period: 90s
 
 volumes:
   # Cache persistente de los pesos Kokoro (~330 MB). Named volume → ownership
