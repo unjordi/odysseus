@@ -1,0 +1,18 @@
+{
+  "Username": "Username",
+  "Password": "Password",
+  "Confirm Password": "Confirm Password",
+  "Sign In": "Sign In",
+  "Sign in": "Sign in",
+  "Sign up": "Sign up",
+  "Don't have an account? ": "Don't have an account? ",
+  "Already have an account? ": "Already have an account? ",
+  "Create Account": "Create Account",
+  "Create Admin Account": "Create Admin Account",
+  "First-time setup — create your admin account": "First-time setup — create your admin account",
+  "Show password": "Show password",
+  "Remember me": "Remember me",
+  "2FA Code": "2FA Code",
+  "Enter 6-digit code": "Enter 6-digit code",
+  "Two-factor authentication code": "Two-factor authentication code"
+}

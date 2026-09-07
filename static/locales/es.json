@@ -1,0 +1,18 @@
+{
+  "Username": "Usuario",
+  "Password": "Contraseña",
+  "Confirm Password": "Confirmar contraseña",
+  "Sign In": "Iniciar sesión",
+  "Sign in": "Iniciar sesión",
+  "Sign up": "Regístrate",
+  "Don't have an account? ": "¿No tienes una cuenta? ",
+  "Already have an account? ": "¿Ya tienes una cuenta? ",
+  "Create Account": "Crear cuenta",
+  "Create Admin Account": "Crear cuenta de administrador",
+  "First-time setup — create your admin account": "Configuración inicial: crea tu cuenta de administrador",
+  "Show password": "Mostrar contraseña",
+  "Remember me": "Recuérdame",
+  "2FA Code": "Código 2FA",
+  "Enter 6-digit code": "Introduce el código de 6 dígitos",
+  "Two-factor authentication code": "Código de autenticación de dos factores"
+}

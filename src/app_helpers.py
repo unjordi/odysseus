@@ -7,7 +7,32 @@ from fastapi import HTTPException
 from fastapi.responses import HTMLResponse
 from starlette.requests import Request
 
+from src.constants import (
+    DEFAULT_UI_LANGUAGE,
+    SUPPORTED_UI_LANGUAGES,
+    UI_LANGUAGE_COOKIE,
+)
+
 logger = logging.getLogger(__name__)
+
+
+def resolve_ui_language(request: Request) -> str:
+    """Resolve the UI language for an initial page render.
+
+    Reads the odysseus_lang cookie (set client-side when the user picks a
+    language) and validates it against the supported set so a stale or crafted
+    cookie can never inject an arbitrary value into the served HTML. Falls back
+    to DEFAULT_UI_LANGUAGE. This only seeds the first paint (<html lang> and the
+    initial catalog choice); the client-side i18n runtime is the source of
+    truth afterwards.
+    """
+    try:
+        lang = request.cookies.get(UI_LANGUAGE_COOKIE, "")
+    except Exception:
+        lang = ""
+    if lang in SUPPORTED_UI_LANGUAGES:
+        return lang
+    return DEFAULT_UI_LANGUAGE
 
 def read_if_exists(path: str) -> str:
     """Read file if it exists, return empty string otherwise."""
@@ -46,6 +71,10 @@ def serve_html_with_nonce(request: Request, file_path: str) -> HTMLResponse:
         raise HTTPException(500, "Internal server error")
     nonce = getattr(request.state, "csp_nonce", "")
     html = html.replace("{{CSP_NONCE}}", nonce)
+    # Seed the first paint with the resolved UI language so <html lang> and the
+    # i18n bootstrap pick the right catalog before any client script runs. Pages
+    # without a {{LANG}} placeholder are unaffected (no-op replace).
+    html = html.replace("{{LANG}}", resolve_ui_language(request))
     return HTMLResponse(html)
 
 

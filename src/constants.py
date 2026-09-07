@@ -11,6 +11,16 @@ BASE_DIR = os.path.join(get_app_root(), "")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 DATA_DIR = os.getenv("ODYSSEUS_DATA_DIR", get_default_data_dir())
 
+# UI localization (i18n)
+# Translation catalogs are served as static assets from LOCALES_DIR
+# (static/locales/<lang>.json). SUPPORTED_UI_LANGUAGES is the single source of
+# truth for which language codes the UI accepts; add a code here and drop a
+# matching <lang>.json to ship another language.
+LOCALES_DIR = os.path.join(STATIC_DIR, "locales")
+SUPPORTED_UI_LANGUAGES = ("en", "es")
+DEFAULT_UI_LANGUAGE = "en"
+UI_LANGUAGE_COOKIE = "odysseus_lang"
+
 # Data file paths
 # Single source of truth: every persisted file/dir lives under DATA_DIR, which
 # is the ONLY place ODYSSEUS_DATA_DIR is read. Import these constants instead of
