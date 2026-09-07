@@ -4422,12 +4422,39 @@ function startOdysseusApp() {
 	    const interimEl = statusEl ? statusEl.querySelector('.voice-flow-interim') : null;
 	    const stopBtn = document.getElementById('voice-flow-stop-btn');
 
+	    // The "Listening…" pill is drawn over the mic button instead of over the
+	    // message text. It can't simply live next to the button
+	    // (.chat-input-left is overflow:hidden and would clip it), so it stays a
+	    // child of .chat-input-top and we hand the CSS two offsets measured off
+	    // the button. Recomputed whenever it's shown and on resize, because the
+	    // toolbar reflows (buttons collapse) as the bar narrows.
+	    const anchorHost = statusEl ? statusEl.parentElement : null;
+	    function anchorStatusToMic() {
+	      if (!statusEl || !anchorHost || statusEl.hidden) return;
+	      const micRect = btn.getBoundingClientRect();
+	      const hostRect = anchorHost.getBoundingClientRect();
+	      if (!micRect.width || !hostRect.width) {
+	        // Mic collapsed or hidden — fall back to the CSS default placement.
+	        statusEl.style.removeProperty('--voice-flow-anchor-x');
+	        statusEl.style.removeProperty('--voice-flow-anchor-bottom');
+	        return;
+	      }
+	      const x = Math.max(0, Math.round(micRect.left - hostRect.left));
+	      // Negative by construction: the toolbar row sits below
+	      // .chat-input-top. +3 centers the 22px pill on the ~28px button.
+	      const bottom = Math.round(hostRect.bottom - micRect.bottom) + 3;
+	      statusEl.style.setProperty('--voice-flow-anchor-x', x + 'px');
+	      statusEl.style.setProperty('--voice-flow-anchor-bottom', bottom + 'px');
+	    }
+	    window.addEventListener('resize', anchorStatusToMic);
+
 	    function setActiveUI(active) {
 	      btn.classList.toggle('recording', active);
 	      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
 	      btn.title = active ? 'Stop dictation' : 'Dictate by voice';
 	      if (statusEl) statusEl.hidden = !active;
 	      if (!active && interimEl) interimEl.textContent = '';
+	      if (active) anchorStatusToMic();
 	    }
 
 	    function onState(state, interim) {
