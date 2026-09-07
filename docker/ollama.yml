@@ -1,0 +1,99 @@
+# docker/ollama.yml — Ollama como servicio del stack (deja de ser un daemon nativo del host).
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# POR QUÉ
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# Es el mismo principio que trajo a axon al stack: lo que vive fuera driftea y se debuggea una y otra vez.
+# Con Ollama el drift NO es de código (lo actualiza pacman) sino de CONFIGURACIÓN INVISIBLE: hoy el
+# comportamiento real depende de dos drop-ins de systemd que no están en ningún repo —
+#   /etc/systemd/system/ollama.service.d/bind-all.conf      → OLLAMA_HOST=0.0.0.0:11434
+#   /etc/systemd/system/ollama.service.d/models-on-steam.conf → OLLAMA_MODELS=/var/lib/ollama-models
+# Ese par ES el "lo dejé nativo y drifteó": nadie que clone el stack lo reproduce, y nada lo señala.
+# Aquí queda declarado, versionado y visible.
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# LOS PESOS NO SE RE-DESCARGAN: se MONTAN EN SU SITIO (34 GB, verificado)
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# El store nativo vive en /var/lib/ollama-models (f2fs, en el SSD; `blobs/` + `manifests/`) y trae
+# qwen3.8:27b, qwen3:14b, qwen2.5vl:7b y qwen3:4b. Ese layout `blobs/`+`manifests/` es EXACTAMENTE el que
+# la imagen oficial espera bajo OLLAMA_MODELS — es el mismo binario `ollama serve`, solo que empaquetado.
+# Por eso el bind-mount de abajo apunta al MISMO directorio y se fija OLLAMA_MODELS a la ruta montada:
+# cero copia, cero migración, cero re-descarga. Un `docker compose down` no toca nada de eso (es un bind
+# del host, no un volumen del proyecto).
+#   ⚠️ Se monta el store DIRECTO (no un volumen nombrado) precisamente para que sea REVERSIBLE: si esto
+#      no gusta, se desmasca ollama.service y el daemon nativo vuelve a leer los mismos archivos.
+#   ⚠️ El contenedor corre como root (default de la imagen). Los blobs NUEVOS que baje quedarán root:root
+#      dentro de un directorio que en el host es ollama:ollama. No rompe nada mientras Ollama viva aquí;
+#      si algún día se revierte a nativo, iguala el dueño una vez:
+#        pkexec chown -R ollama:ollama /var/lib/ollama-models
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# EL PIN EN RAM SOBREVIVE (y por qué)
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# `ollama-ram-pin.service` (system) hace mlock sobre /var/lib/ollama-models/blobs — ~18 GB clavados en
+# RAM para que el OS no desaloje el cache. Ese pin es sobre el PAGE CACHE de esos inodos, no sobre el
+# proceso que los lee: un bind-mount es el mismo inodo, así que el contenedor lee páginas YA pinneadas.
+# El servicio de pin se queda como está, en el host. (Sí tiene `Wants=ollama.service`; ver el preflight
+# de levantar-stack.sh: por eso ollama.service se MASCARA y no solo se deshabilita — un `Wants=` puede
+# re-arrancar una unidad meramente deshabilitada.)
+#
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+# ANTES DEL PRIMER `up`: liberar el puerto 11434 (lo hace ver levantar-stack.sh, que NO arranca a ciegas)
+# ─────────────────────────────────────────────────────────────────────────────────────────────────────
+#   pkexec systemctl mask --now ollama.service     # libera :11434 y evita que un Wants= lo reviva
+# El puerto se sigue publicando en el host con el MISMO bind (0.0.0.0:11434) → todo lo que hoy habla con
+# `localhost:11434` (el `ollama` CLI, axon nativo, cualquier script) sigue funcionando sin cambiar nada.
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    # Alias estable en la red del compose: es el `AXON_OLLAMA_URL=http://ollama:11434` de docker/axon.yml
+    # y el `OLLAMA_BASE_URL=http://ollama:11434` que Odysseus puede usar sin salir por el host.
+    hostname: ollama
+    ports:
+      # MISMO bind que el drop-in bind-all.conf del servicio nativo (0.0.0.0), para no romper a nadie que
+      # hoy le pegue desde fuera del host. Baja a 127.0.0.1 con OLLAMA_BIND si prefieres cerrarlo.
+      - "${OLLAMA_BIND:-0.0.0.0}:${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      # EL STORE EXISTENTE, EN SU SITIO. No es un volumen del proyecto: es el directorio del host.
+      - ${OLLAMA_MODELS_DIR:-/var/lib/ollama-models}:/models
+    environment:
+      # Dentro del contenedor hay que escuchar en 0.0.0.0 o el port-mapping no llega a ningún lado.
+      - OLLAMA_HOST=0.0.0.0:11434
+      # Apunta al bind de arriba. Explícito: sin esto la imagen usaría /root/.ollama/models y "no habría
+      # modelos" — el modo de fallo clásico al contenerizar Ollama.
+      - OLLAMA_MODELS=/models
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    # GPU: MISMO patrón que ya usa el servicio `odysseus` en docker-compose.gpu-nvidia.yml (NVIDIA
+    # Container Toolkit, verificado presente en este host: runtime `nvidia` registrado en dockerd).
+    # `count: all` = las dos (RTX 5070 Ti + RTX A4000), igual que ve el daemon nativo hoy.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      # La imagen ollama/ollama NO trae curl/wget (Ubuntu mínima, solo el binario `ollama`). `ollama list`
+      # pega al mismo GET /api/tags desde el CLI ya presente → gate de cold-start sin instalar nada.
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  # Con Ollama DENTRO del stack, Odysseus deja de salir por host.docker.internal y lo alcanza por la red
+  # interna. Se declara aquí (no en el .env) para que la URL viva junto al servicio que la sirve: si
+  # alguien quita este overlay, se va la variable con él y Odysseus vuelve a su default.
+  odysseus:
+    environment:
+      # OJO al `/v1`: Odysseus habla con Ollama por su API OpenAI-compat (así estaba apuntado al host:
+      # `http://host.docker.internal:11434/v1`). axon en cambio usa la API nativa (`/api/...`) y su
+      # AXON_OLLAMA_URL va SIN sufijo. Son dos contratos distintos contra el mismo motor.
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://ollama:11434/v1}
+    depends_on:
+      ollama:
+        condition: service_healthy
