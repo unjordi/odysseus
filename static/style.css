@@ -2579,17 +2579,24 @@ body.bg-pattern-sparkles {
 	    .plan-mode-status-toggle:hover {
 	      background: color-mix(in srgb, var(--accent, var(--red)) 30%, transparent);
 	    }
-	    /* Whisper-flow dictation indicator — mirrors .plan-mode-status but
-	       anchored to the opposite corner so the two never collide. */
+	    /* Whisper-flow dictation indicator — a pill anchored to the mic button
+	       (#voice-input-btn), NOT to the message box: it used to sit at the
+	       bottom-left of the textarea, covering the text being read/typed.
+	       app.js measures the button and sets the two vars below; the fallback
+	       values are that old bottom-left placement and are what gets used when
+	       the mic is collapsed out of a narrow toolbar (no button to anchor to).
+	       It stays a child of .chat-input-top (position:relative, nothing
+	       clipping it) instead of moving next to the button, because
+	       .chat-input-left is overflow:hidden and would cut the pill off. */
 	    .voice-flow-status {
 	      position: absolute;
-	      left: 0;
-	      bottom: 2px;
+	      left: var(--voice-flow-anchor-x, 0px);
+	      bottom: var(--voice-flow-anchor-bottom, 2px);
 	      z-index: 245;
 	      display: inline-flex;
 	      align-items: center;
 	      gap: 6px;
-	      max-width: calc(100% - 8px);
+	      max-width: calc(100% - var(--voice-flow-anchor-x, 0px) - 8px);
 	      height: 22px;
 	      padding: 0 6px 0 8px;
 	      border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
@@ -2601,6 +2608,10 @@ body.bg-pattern-sparkles {
 	      line-height: 1;
 	    }
 	    .voice-flow-status[hidden] { display: none !important; }
+	    /* The interim text is what used to make the pill span the whole bar.
+	       Anchored to the mic it has less room, so cap it and let it ellipsize
+	       rather than push the pill across the composer. */
+	    .voice-flow-status .voice-flow-interim { max-width: 22ch; }
 	    .voice-flow-dot {
 	      width: 7px;
 	      height: 7px;
@@ -3328,11 +3339,17 @@ body.bg-pattern-sparkles {
       color: var(--fg);
     }
     .model-picker-btn #model-picker-label {
-      /* Ancho RESPONSIVO: crece con el viewport (los nombres largos tipo
-         "gpt-oss-120b" ya no se cortan en pantallas con espacio) pero mantiene
-         piso 120px y techo 340px + ellipsis para no reventar el chat-bar en
-         ventanas angostas. */
-      max-width: clamp(120px, 22vw, 340px);
+      /* Content-width, capped — never a fixed width, or the next long model
+         name breaks it again. The label is already sized by its content
+         (inline-flex button); this only bounds it.
+         The cap follows the CHAT BAR (cqi = 1% of the .chat-input-bar
+         container's inline size), not the viewport: the picker is absolutely
+         positioned inside the bar, so the bar's width is what it can actually
+         spend, and the bar can be a split pane far narrower than the window.
+         Floor 140px fits the real names — "gpt-oss-120b", "claude-opus-5",
+         "qwen2.5vl:7b" — even in a narrow bar; the ellipsis stays for the
+         pathological ones (Anthropic's date-suffixed ids). */
+      max-width: clamp(140px, 45cqi, 360px);
       overflow: hidden;
       text-overflow: ellipsis;
     }

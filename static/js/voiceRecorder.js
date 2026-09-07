@@ -58,9 +58,17 @@ async function refreshSttProvider() {
  * Send audio to server for transcription. Shared by whisper-flow's
  * per-segment transcription below.
  */
+// Per-request language override for the local/endpoint providers: dictation
+// stays on the configured language (es) and a caller can flip ONE session to
+// another one — e.g. reading a stack trace aloud in English — without touching
+// the global setting. Empty string = use the saved config, which is the
+// default and the only behavior until something sets this.
+let _sttLanguageOverride = '';
+
 async function transcribeOnServer(audioBlob) {
   const formData = new FormData();
   formData.append('file', audioBlob, 'audio.webm');
+  if (_sttLanguageOverride) formData.append('language', _sttLanguageOverride);
 
   const res = await fetch('/api/stt/transcribe', {
     method: 'POST',
@@ -268,16 +276,33 @@ export function startWhisperFlow(opts) {
   }
 
   _flowActive = true;
-  navigator.mediaDevices.getUserMedia({ audio: true })
+  // Capture constraints matter as much as the model here. Browsers default to
+  // echoCancellation/noiseSuppression/autoGainControl ON, and those processors
+  // ramp up over the first second or two of a fresh stream — which is exactly
+  // where dictation loses its opening words ("el piso está enladrillado…" came
+  // back starting at "…nadriado"). They also chew the unvoiced consonants
+  // (s, f, p) that Spanish leans on. Bare values are "ideal", so a device that
+  // can't honour them still gets a stream instead of an error.
+  navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: false,
+      noiseSuppression: false,
+      autoGainControl: false,
+      channelCount: 1,
+    },
+  })
     .then((stream) => {
       if (!_flowActive) {
         stream.getTracks().forEach((t) => t.stop());
         return;
       }
       _flowStream = stream;
+      // Start recording FIRST, then paint the UI: the user is usually already
+      // talking by the time the permission/stream resolves, so every ms spent
+      // on toasts before rec.start() is audio nobody captured.
+      _recordFlowSegment(stream);
       _flowSetState('listening');
       if (showToast) showToast('Listening…');
-      _recordFlowSegment(stream);
     })
     .catch((error) => {
       _flowActive = false;
@@ -341,6 +366,11 @@ const voiceRecorderModule = {
   refreshSttProvider,
   get _sttProvider() { return _sttProvider; },
   set _sttProvider(v) { _setSttProvider(v); },
+  // "" (default) = whatever the server settings say; "en" et al. override this
+  // dictation session only. No UI control is wired to it yet — see the STT
+  // notes in services/stt/stt_service.py for the request contract.
+  get sttLanguageOverride() { return _sttLanguageOverride; },
+  set sttLanguageOverride(v) { _sttLanguageOverride = (v || '').trim().toLowerCase(); },
 };
 
 export default voiceRecorderModule;

@@ -4,12 +4,317 @@
 import io
 import logging
 import os
+import re
 import httpx
 import tempfile
 from pathlib import Path
 from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
+
+# ── Local Whisper (faster-whisper) tuning ──
+#
+# Recipe from the 2026-09-06 diagnosis (see data/stt-instrucciones.md): dictation
+# is short Spanish clips with English tech jargon mixed in, and language
+# autodetection on ~3s clips picks "en" about as often as a coin flip, which
+# turns the whole clip into phonetic English ("to the boss"). So: language is
+# always pinned, never autodetected.
+#
+# Model choice — large-v3-turbo, NOT large-v3: turbo has 4 decoder layers
+# instead of 32, so it decodes ~5-8x faster with a quality loss that only shows
+# on long audio and low-resource languages. Dictation is neither (short clips,
+# Spanish is one of Whisper's best-covered languages), and on this CPU path the
+# real bottleneck is per-clip latency, not throughput. If turbo ever proves too
+# slow here, the fallback is `medium` — never back to `base`, which is where
+# ~80% of the jargon mangling came from.
+DEFAULT_STT_MODEL = "large-v3-turbo"
+DEFAULT_STT_LANGUAGE = "es"
+# A BARE TERM LIST, not a sentence. Whisper echoes its own prompt back when
+# there is no speech to transcribe: with the previous prose prompt
+# ("Transcripción de dictado técnico en español de México. Términos
+# frecuentes: ...") a mic left open produced "Términos frecuentes en español
+# de México." dozens of times. A comma-separated list still biases the
+# vocabulary but has no sentence for the decoder to complete.
+DEFAULT_STT_INITIAL_PROMPT = (
+    "Whisper, cuantización, MCP, endpoint, VRAM, faster-whisper, ctranslate2, "
+    "push-to-talk, latencia, commit, deploy, backend, axon, Odysseus."
+)
+# faster-whisper truncates initial_prompt at ~224 tokens silently; cap the
+# configurable value well under any pathological input.
+MAX_INITIAL_PROMPT_CHARS = 1000
+
+# VAD defaults (Silero, bundled with faster-whisper). speech_pad is generous on
+# purpose: a tight pad eats the start of the sentence, which is exactly where
+# Whisper loses the thread and starts inventing.
+DEFAULT_VAD_MIN_SILENCE_MS = 300
+DEFAULT_VAD_SPEECH_PAD_MS = 400
+
+# ── Anti-hallucination on silence ──
+#
+# Whisper's documented failure mode: fed audio with no speech, the decoder
+# fills in the most frequent sequences of its training corpus (YouTube
+# subtitles) and loops — "¡Gracias por ver el video!", "¡Suscríbete al canal!",
+# "activa la campanita" — or echoes its own initial_prompt. Observed live on
+# 2026-09-07 with a mic left open by accident.
+#
+# Defense in depth, because no single knob covers it:
+#   1. vad_filter          — non-speech never reaches the decoder (primary).
+#   2. no_speech_threshold — segments the model itself flags as silence are
+#                            skipped (works together with log_prob_threshold).
+#   3. temperature ladder  — thresholds below only *trigger a retry*; with a
+#                            single temperature there is nothing to fall back
+#                            to, so they are inert. The ladder is what makes
+#                            compression_ratio_threshold able to reject
+#                            degenerate output. First pass is still greedy
+#                            (0.0), so a clean clip decodes deterministically.
+#   4. compression_ratio_threshold — catches repetition loops (a looped
+#                            transcript compresses far better than speech).
+#   5. condition_on_previous_text=False — stops a loop from being carried into
+#                            the next window.
+#   6. filter_degenerate_text() — our own last line: whatever still gets
+#                            through (a prompt echo, a repeated stock phrase)
+#                            is dropped before it reaches the composer.
+DEFAULT_NO_SPEECH_THRESHOLD = 0.6
+DEFAULT_LOG_PROB_THRESHOLD = -1.0
+DEFAULT_COMPRESSION_RATIO_THRESHOLD = 2.4
+DEFAULT_TEMPERATURE_LADDER = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
+
+# Whisper model sizes accepted for the per-request model override. WhisperModel
+# treats any unknown string as a HuggingFace repo id and will happily download
+# it, so an unvalidated override would be a remote-fetch primitive on a route
+# that only needs to pick between local models. The configured global model is
+# always allowed on top of this list (an operator may legitimately point
+# stt_model at a custom CT2 repo; a *request* may not).
+ALLOWED_LOCAL_MODELS = frozenset({
+    "tiny", "tiny.en",
+    "base", "base.en",
+    "small", "small.en",
+    "medium", "medium.en",
+    "large-v1", "large-v2", "large-v3", "large",
+    "large-v3-turbo", "turbo",
+    "distil-large-v2", "distil-large-v3", "distil-small.en", "distil-medium.en",
+})
+
+# Whisper language codes are ISO 639-1/639-3 style, lowercase, no region suffix
+# ("es", not "es-MX" — faster-whisper raises on the latter).
+_LANGUAGE_RE = re.compile(r"^[a-z]{2,3}$")
+
+
+def _as_bool(value: Any, default: bool) -> bool:
+    """Coerce a settings/form value to bool without surprises.
+
+    Settings arrive from JSON (real bools) but request overrides arrive from
+    multipart form fields (strings), so "false"/"0"/"off" must not read as True.
+    """
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in ("1", "true", "yes", "on"):
+        return True
+    if text in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+def _as_int(value: Any, default: int, lo: int, hi: int) -> int:
+    try:
+        return max(lo, min(int(value), hi))
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(value: Any, default: float, lo: float, hi: float) -> float:
+    try:
+        return max(lo, min(float(value), hi))
+    except (TypeError, ValueError):
+        return default
+
+
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+|\n+")
+_WORD_RE = re.compile(r"[\wáéíóúüñ]+", re.IGNORECASE)
+
+
+def _normalize(text: str) -> str:
+    return " ".join(_WORD_RE.findall(text.lower()))
+
+
+def filter_degenerate_text(text: str, initial_prompt: str = "") -> str:
+    """Drop Whisper's silence hallucinations before they reach the composer.
+
+    Two signatures, both observed live on 2026-09-07 with a mic left open:
+
+    * **Prompt echo** — with nothing to transcribe the decoder completes its own
+      initial_prompt ("Términos frecuentes en español de México.", over and over).
+    * **Stock-phrase loops** — the YouTube-subtitle artifacts Whisper learned
+      ("¡Gracias por ver el video!", "¡Suscríbete al canal!"), repeated dozens of
+      times.
+
+    Both are recognizable without the audio: a sentence whose words are almost
+    all drawn from the prompt, or a sentence repeated verbatim inside a single
+    ~3.5s clip (which cannot physically hold the same sentence twice). When most
+    of the clip is that kind of junk the whole thing is treated as no-speech and
+    dropped, which sweeps up the one-offs riding along with the loop. A real
+    dictation clip has neither signature, so nothing is removed from it.
+    """
+    if not text or not text.strip():
+        return ""
+
+    sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
+    if not sentences:
+        return ""
+
+    prompt_words = set(_normalize(initial_prompt).split())
+    counts: Dict[str, int] = {}
+    for sentence in sentences:
+        key = _normalize(sentence)
+        counts[key] = counts.get(key, 0) + 1
+
+    kept = []
+    dropped = 0
+    for sentence in sentences:
+        key = _normalize(sentence)
+        words = key.split()
+
+        # The same sentence twice in one short clip is a decoder loop, not
+        # speech — a distinct sentence repeated for emphasis ("No, no. No
+        # entendí.") does not collide, because the sentences differ.
+        if counts.get(key, 0) >= 2:
+            dropped += 1
+            continue
+
+        # Prompt echo: ≥4 words and almost all of them come from the prompt.
+        if prompt_words and len(words) >= 4:
+            overlap = sum(1 for w in words if w in prompt_words) / len(words)
+            if overlap >= 0.8:
+                dropped += 1
+                continue
+
+        kept.append(sentence)
+
+    if not kept:
+        return ""
+
+    # If the clip was mostly junk, the leftovers are junk too (the one-off
+    # "Gracias por su atención." riding along with the loop).
+    if dropped and dropped >= len(sentences) / 2:
+        return ""
+
+    return " ".join(kept)
+
+
+def sanitize_overrides(raw: Optional[Dict[str, Any]], *, allowed_model: str = "") -> Dict[str, Any]:
+    """Validate a per-request override bundle, dropping anything unusable.
+
+    Anything invalid is dropped (not raised on): an override is a convenience,
+    and a bad one must never fail a transcription that the global config could
+    have served. Returns only the keys that survived validation, so callers can
+    distinguish "not requested" from "requested and empty".
+    """
+    if not raw:
+        return {}
+    clean: Dict[str, Any] = {}
+
+    language = raw.get("language")
+    if language:
+        language = str(language).strip().lower()
+        if _LANGUAGE_RE.match(language):
+            clean["language"] = language
+        else:
+            logger.warning(f"STT override: ignoring invalid language {language!r}")
+
+    model = raw.get("model")
+    if model:
+        model = str(model).strip()
+        if model in ALLOWED_LOCAL_MODELS or (allowed_model and model == allowed_model):
+            clean["model"] = model
+        else:
+            logger.warning(f"STT override: ignoring non-allowlisted model {model!r}")
+
+    initial_prompt = raw.get("initial_prompt")
+    if initial_prompt is not None:
+        # An explicitly empty prompt is meaningful ("no glossary for this clip").
+        clean["initial_prompt"] = str(initial_prompt)[:MAX_INITIAL_PROMPT_CHARS]
+
+    vad_filter = raw.get("vad_filter")
+    if vad_filter is not None and vad_filter != "":
+        clean["vad_filter"] = _as_bool(vad_filter, True)
+
+    return clean
+
+
+def build_local_transcribe_kwargs(
+    settings: Dict[str, Any],
+    overrides: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Build the kwargs handed to faster-whisper's ``model.transcribe``.
+
+    Pure function on purpose: it is the whole contract between our settings and
+    the library, and it can be asserted on without faster-whisper installed.
+    Precedence is request override → saved setting → module default; an
+    override never mutates or persists the global config.
+    """
+    overrides = overrides or {}
+
+    language = overrides.get("language") or settings.get("stt_language") or DEFAULT_STT_LANGUAGE
+
+    if "initial_prompt" in overrides:
+        initial_prompt = overrides["initial_prompt"]
+    else:
+        initial_prompt = settings.get("stt_initial_prompt")
+        if initial_prompt is None:
+            initial_prompt = DEFAULT_STT_INITIAL_PROMPT
+
+    vad_filter = _as_bool(
+        overrides.get("vad_filter", settings.get("stt_vad_filter")),
+        True,
+    )
+
+    kwargs: Dict[str, Any] = {
+        # language is ALWAYS pinned — never autodetection: on short clips
+        # (<2-3s) Whisper detects English and returns garbage ("to the boss").
+        "language": language,
+        "task": "transcribe",                 # never "translate"
+        "condition_on_previous_text": False,  # no dragging hallucinations/loops
+        # Greedy first pass, then the fallback ladder — see the anti-hallucination
+        # note above: without more than one temperature the thresholds below can
+        # never fire.
+        "temperature": list(DEFAULT_TEMPERATURE_LADDER),
+        "no_speech_threshold": _as_float(
+            settings.get("stt_no_speech_threshold"), DEFAULT_NO_SPEECH_THRESHOLD, 0.0, 1.0
+        ),
+        "log_prob_threshold": DEFAULT_LOG_PROB_THRESHOLD,
+        "compression_ratio_threshold": DEFAULT_COMPRESSION_RATIO_THRESHOLD,
+        "vad_filter": vad_filter,
+    }
+
+    if initial_prompt:
+        kwargs["initial_prompt"] = initial_prompt
+
+    if vad_filter:
+        vad_parameters: Dict[str, Any] = {
+            "min_silence_duration_ms": _as_int(
+                settings.get("stt_vad_min_silence_ms"), DEFAULT_VAD_MIN_SILENCE_MS, 0, 10000
+            ),
+            "speech_pad_ms": _as_int(
+                settings.get("stt_vad_speech_pad_ms"), DEFAULT_VAD_SPEECH_PAD_MS, 0, 5000
+            ),
+        }
+        # Silero's speech probability threshold. Left unset by default so the
+        # library default (0.5) applies; lower it if a quiet phone mic gets its
+        # speech filtered out entirely (see the 0-chars note in get_stats docs).
+        threshold = settings.get("stt_vad_threshold")
+        if threshold not in (None, ""):
+            try:
+                vad_parameters["threshold"] = max(0.0, min(float(threshold), 1.0))
+            except (TypeError, ValueError):
+                logger.warning(f"STT: ignoring invalid stt_vad_threshold {threshold!r}")
+        kwargs["vad_parameters"] = vad_parameters
+
+    return kwargs
 
 
 class STTService:
@@ -24,7 +329,12 @@ class STTService:
     """
 
     def __init__(self):
-        self._whisper_model = None  # lazy-init
+        # Loaded models, keyed by model size. The configured model is loaded
+        # once and stays resident; a per-request model override loads a second
+        # one lazily (and keeps it — reloading a large model per request would
+        # cost seconds). Each large-v3-class model is ~1.5GB in int8, so an
+        # override is a deliberate act, not something the UI does per clip.
+        self._whisper_models: Dict[str, Any] = {}
 
     # ── Settings ──
 
@@ -34,8 +344,14 @@ class STTService:
         return {
             "stt_enabled": saved.get("stt_enabled", False),
             "stt_provider": saved.get("stt_provider", "disabled"),
-            "stt_model": saved.get("stt_model", "large-v3"),
-            "stt_language": saved.get("stt_language", "es"),
+            "stt_model": saved.get("stt_model", DEFAULT_STT_MODEL),
+            "stt_language": saved.get("stt_language", DEFAULT_STT_LANGUAGE),
+            "stt_initial_prompt": saved.get("stt_initial_prompt", DEFAULT_STT_INITIAL_PROMPT),
+            "stt_vad_filter": saved.get("stt_vad_filter", True),
+            "stt_vad_min_silence_ms": saved.get("stt_vad_min_silence_ms", DEFAULT_VAD_MIN_SILENCE_MS),
+            "stt_vad_speech_pad_ms": saved.get("stt_vad_speech_pad_ms", DEFAULT_VAD_SPEECH_PAD_MS),
+            "stt_vad_threshold": saved.get("stt_vad_threshold", ""),
+            "stt_no_speech_threshold": saved.get("stt_no_speech_threshold", DEFAULT_NO_SPEECH_THRESHOLD),
         }
 
     @property
@@ -56,54 +372,64 @@ class STTService:
 
     # ── Local Whisper ──
 
-    def _get_whisper(self):
-        if self._whisper_model is None:
+    def _get_whisper(self, model_size: Optional[str] = None):
+        """Return the loaded WhisperModel for ``model_size`` (default: configured).
+
+        Called with no arguments on the hot path, which keeps it patchable as a
+        zero-arg callable in existing tests; a per-request model override passes
+        the size explicitly.
+        """
+        if not model_size:
+            model_size = self._load_settings().get("stt_model") or DEFAULT_STT_MODEL
+        cached = self._whisper_models.get(model_size)
+        if cached is not None:
+            return cached
+
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError:
+            logger.warning("faster-whisper not installed. Install with: pip install faster-whisper")
+            return None
+        try:
+            # faster-whisper runs on CTranslate2, not torch. torch is only
+            # used (optionally) to detect a CUDA device for acceleration —
+            # if it's missing or unusable we just run on CPU. Keeping this
+            # probe separate (and tolerant of any failure, e.g. a broken
+            # CUDA/torch install that raises OSError on import) means a
+            # torch-less or torch-broken machine still does CPU
+            # transcription instead of failing with a misleading
+            # "faster-whisper not installed" error.
             try:
-                from faster_whisper import WhisperModel
-            except ImportError:
-                logger.warning("faster-whisper not installed. Install with: pip install faster-whisper")
-                return None
-            try:
-                settings = self._load_settings()
-                model_size = settings.get("stt_model", "base")
-                # faster-whisper runs on CTranslate2, not torch. torch is only
-                # used (optionally) to detect a CUDA device for acceleration —
-                # if it's missing or unusable we just run on CPU. Keeping this
-                # probe separate (and tolerant of any failure, e.g. a broken
-                # CUDA/torch install that raises OSError on import) means a
-                # torch-less or torch-broken machine still does CPU
-                # transcription instead of failing with a misleading
-                # "faster-whisper not installed" error.
-                try:
-                    import torch
-                    use_cuda = torch.cuda.is_available()
-                except Exception:
-                    use_cuda = False
-                device = "cuda" if use_cuda else "cpu"
-                compute_type = "float16" if device == "cuda" else "int8"
-                # CTranslate2's own intra-op thread pool (NOT the same knob as
-                # torch/OMP — CTranslate2 ignores OMP_NUM_THREADS for its own
-                # ops). 0 = CTranslate2 auto-picks (usually all cores), which
-                # can starve the FastAPI event loop / other CPU work in this
-                # same process (Kokoro's in-process pipeline, DB, etc). Pin it
-                # explicitly so a transcribe() call stays fast without
-                # hogging every core. Override with ODYSSEUS_STT_CPU_THREADS.
-                cpu_threads = int(os.getenv("ODYSSEUS_STT_CPU_THREADS", "16"))
-                self._whisper_model = WhisperModel(
-                    model_size,
-                    device=device,
-                    compute_type=compute_type,
-                    cpu_threads=cpu_threads if device == "cpu" else 0,
-                    num_workers=1,
-                )
-                logger.info(
-                    f"faster-whisper model '{model_size}' loaded on {device} "
-                    f"(cpu_threads={cpu_threads if device == 'cpu' else 'n/a'})"
-                )
-            except Exception as e:
-                logger.error(f"Failed to load whisper model: {e}")
-                return None
-        return self._whisper_model
+                import torch
+                use_cuda = torch.cuda.is_available()
+            except Exception:
+                use_cuda = False
+            device = "cuda" if use_cuda else "cpu"
+            compute_type = "float16" if device == "cuda" else "int8"
+            # CTranslate2's own intra-op thread pool (NOT the same knob as
+            # torch/OMP — CTranslate2 ignores OMP_NUM_THREADS for its own
+            # ops). 0 = CTranslate2 auto-picks (usually all cores), which
+            # can starve the FastAPI event loop / other CPU work in this
+            # same process (Kokoro's in-process pipeline, DB, etc). Pin it
+            # explicitly so a transcribe() call stays fast without
+            # hogging every core. Override with ODYSSEUS_STT_CPU_THREADS.
+            cpu_threads = int(os.getenv("ODYSSEUS_STT_CPU_THREADS", "16"))
+            model = WhisperModel(
+                model_size,
+                device=device,
+                compute_type=compute_type,
+                cpu_threads=cpu_threads if device == "cpu" else 0,
+                num_workers=1,
+            )
+            logger.info(
+                f"faster-whisper model '{model_size}' loaded on {device} "
+                f"(cpu_threads={cpu_threads if device == 'cpu' else 'n/a'})"
+            )
+        except Exception as e:
+            logger.error(f"Failed to load whisper model '{model_size}': {e}")
+            return None
+        self._whisper_models[model_size] = model
+        return model
 
     def preload(self) -> bool:
         """Eagerly load (and keep resident) the local Whisper model.
@@ -126,8 +452,30 @@ class STTService:
             return False
         return self._get_whisper() is not None
 
-    def _transcribe_local(self, audio_bytes: bytes, language: str = "") -> Optional[str]:
-        model = self._get_whisper()
+    def _transcribe_local(
+        self,
+        audio_bytes: bytes,
+        language: str = "",
+        settings: Optional[Dict[str, Any]] = None,
+        overrides: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """Transcribe with the local faster-whisper model.
+
+        ``settings`` is the already-loaded settings dict (the caller has it);
+        ``overrides`` is the sanitized per-request bundle. Both are optional so
+        the legacy two-argument call still works unchanged.
+        """
+        overrides = overrides or {}
+        if settings is None:
+            settings = self._load_settings()
+        if language:
+            # Legacy positional arg: the caller already resolved the language.
+            settings = {**settings, "stt_language": language}
+
+        model_override = overrides.get("model")
+        # Called with no args unless a model override is in play, so a zero-arg
+        # patched _get_whisper (existing tests) keeps working.
+        model = self._get_whisper(model_override) if model_override else self._get_whisper()
         if not model:
             return None
         tmp_path = None
@@ -137,32 +485,36 @@ class STTService:
                 tmp.write(audio_bytes)
                 tmp_path = tmp.name
 
-            # Config para español (receta validada, chat unjordi↔Opus5 2026-09-06):
-            # los 3 que más mueven la aguja contra el "to the boss" son
-            # language fijo, VAD con speech_pad generoso, y condition_on_previous_text=False.
-            kwargs = {
-                # language SIEMPRE fijo — NUNCA autodetección: en clips cortos (<2-3s)
-                # Whisper detecta inglés y produce basura ("to the boss"). Default es-MX.
-                "language": language or "es",
-                "task": "transcribe",              # nunca "translate"
-                "vad_filter": True,
-                "vad_parameters": dict(
-                    min_silence_duration_ms=300,
-                    speech_pad_ms=400,             # no comerse el inicio de frase
-                ),
-                "condition_on_previous_text": False,  # evita arrastrar alucinaciones/bucles
-                "temperature": 0.0,
-                "initial_prompt": (
-                    "Transcripción de dictado técnico en español de México. "
-                    "Términos frecuentes: Whisper, cuantización, MCP, endpoint, "
-                    "VRAM, faster-whisper, ctranslate2, push-to-talk, latencia, axon, Odysseus."
-                ),
-            }
+            # Recipe validated in the 2026-09-06 diagnosis: the three knobs that
+            # actually move the needle against "to the boss" are the pinned
+            # language, VAD with a generous speech_pad, and
+            # condition_on_previous_text=False. See build_local_transcribe_kwargs.
+            kwargs = build_local_transcribe_kwargs(settings, overrides)
 
             segments, info = model.transcribe(tmp_path, **kwargs)
-            text = " ".join(seg.text.strip() for seg in segments)
+            raw_text = " ".join(seg.text.strip() for seg in segments)
+            text = filter_degenerate_text(raw_text, kwargs.get("initial_prompt", ""))
 
-            logger.info(f"Local STT: {len(text)} chars, lang={info.language}, prob={info.language_probability:.2f}")
+            # duration_after_vad tells apart the two very different reasons a
+            # clip comes back empty: VAD ate all of it (silence — expected for
+            # the continuous 3.5s segments the composer mic records while the
+            # user isn't talking) vs the model genuinely produced nothing.
+            duration = getattr(info, "duration", None)
+            after_vad = getattr(info, "duration_after_vad", None)
+            detail = f"lang={info.language}, prob={info.language_probability:.2f}"
+            if duration is not None:
+                detail += f", dur={duration:.2f}s"
+            if after_vad is not None and after_vad != duration:
+                detail += f", after_vad={after_vad:.2f}s"
+            if text != raw_text:
+                logger.info(
+                    f"Local STT: dropped hallucinated output ({len(raw_text)} chars) — {raw_text[:120]!r}"
+                )
+            if not text and kwargs.get("vad_filter") and after_vad is not None and after_vad <= 0.0:
+                logger.info(f"Local STT: no speech (VAD removed all audio), {detail}")
+            else:
+                logger.info(f"Local STT: {len(text)} chars, {detail}")
+            self._save_debug_audio(audio_bytes, text, duration, after_vad)
             return text
         except Exception as e:
             logger.error(f"Local STT transcription failed: {e}", exc_info=True)
@@ -170,6 +522,34 @@ class STTService:
         finally:
             if tmp_path:
                 Path(tmp_path).unlink(missing_ok=True)
+
+    def _save_debug_audio(self, audio_bytes: bytes, text: str, duration, after_vad) -> None:
+        """Dump the received clip so it can actually be listened to.
+
+        Off unless ODYSSEUS_STT_DEBUG_DIR is set. This exists because the one
+        question no parameter can answer from a log line is "did the audio ever
+        contain the words?" — e.g. a dictation that comes back missing its first
+        two seconds is either a capture problem (the browser never recorded
+        them) or a decode problem, and only the clip itself tells them apart.
+        Writes the raw upload (a .webm as the browser encoded it) plus a .txt
+        with what came out.
+        """
+        debug_dir = os.getenv("ODYSSEUS_STT_DEBUG_DIR", "").strip()
+        if not debug_dir:
+            return
+        try:
+            import time
+            target = Path(debug_dir)
+            target.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}"
+            (target / f"{stamp}.webm").write_bytes(audio_bytes)
+            (target / f"{stamp}.txt").write_text(
+                f"bytes={len(audio_bytes)}\nduration={duration}\nduration_after_vad={after_vad}\n"
+                f"text={text!r}\n",
+                encoding="utf-8",
+            )
+        except Exception as e:  # never break a transcription over debug output
+            logger.warning(f"STT debug dump failed: {e}")
 
     # ── API endpoint ──
 
@@ -210,7 +590,14 @@ class STTService:
 
     # ── Public interface ──
 
-    def transcribe(self, audio_bytes: bytes) -> Optional[str]:
+    def transcribe(self, audio_bytes: bytes, options: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        """Transcribe one clip.
+
+        ``options`` is an optional per-request override bundle (language, model,
+        initial_prompt, vad_filter) — e.g. "this clip is in English" without
+        touching the global config. Invalid or unknown entries are dropped, so a
+        malformed override degrades to the saved settings instead of failing.
+        """
         settings = self._load_settings()
         if settings.get("stt_enabled") is False:
             return None
@@ -221,11 +608,18 @@ class STTService:
         if provider in ("disabled", "browser"):
             return None
 
+        overrides = sanitize_overrides(options, allowed_model=model)
+
         if provider == "local":
-            return self._transcribe_local(audio_bytes, language)
+            return self._transcribe_local(audio_bytes, settings=settings, overrides=overrides)
         elif provider.startswith("endpoint:"):
             endpoint_id = provider.split(":", 1)[1]
-            return self._transcribe_api(audio_bytes, endpoint_id, model, language)
+            return self._transcribe_api(
+                audio_bytes,
+                endpoint_id,
+                overrides.get("model") or model,
+                overrides.get("language") or language,
+            )
         else:
             logger.error(f"Unknown STT provider: {provider}")
             return None
@@ -247,6 +641,11 @@ class STTService:
         if provider == "local":
             whisper = self._get_whisper()
             stats["model_loaded"] = whisper is not None
+            # Surfaced so the STT config can be checked from outside the box
+            # (this endpoint is what proved `language: ""` was the "to the boss"
+            # bug in the first place).
+            stats["vad_filter"] = _as_bool(settings.get("stt_vad_filter"), True)
+            stats["initial_prompt"] = settings.get("stt_initial_prompt") or ""
         elif provider == "browser":
             stats["model"] = "Browser (Web Speech API)"
         elif provider.startswith("endpoint:"):

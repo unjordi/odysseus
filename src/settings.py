@@ -71,8 +71,39 @@ DEFAULT_SETTINGS = {
     # if a CUDA torch is present.
     "stt_enabled": True,
     "stt_provider": "local",
-    "stt_model": "base",
-    "stt_language": "",
+    # large-v3-turbo, not large-v3: 4 decoder layers instead of 32, so it
+    # decodes several times faster with a quality loss that only shows on long
+    # audio and low-resource languages — dictation is neither (short clips,
+    # Spanish is one of Whisper's best-covered languages). `base` is where most
+    # of the mangled tech jargon came from; if turbo is ever too slow on a given
+    # box the step down is `medium`, never back to `base`.
+    "stt_model": "large-v3-turbo",
+    # NEVER "" (autodetection): on ~3s clips Whisper picks the language about as
+    # often as a coin flip and transcribes Spanish as phonetic English.
+    "stt_language": "es",
+    # Glossary prepended to each clip so tech terms don't come back
+    # hispanicized ("commit" -> "comit"). Editable; faster-whisper truncates
+    # past ~224 tokens silently.
+    "stt_initial_prompt": (
+        "Transcripción de dictado técnico en español de México. "
+        "Términos frecuentes: Whisper, cuantización, MCP, endpoint, "
+        "VRAM, faster-whisper, ctranslate2, push-to-talk, latencia, axon, Odysseus."
+    ),
+    # Voice-activity detection: drops non-speech before decoding, which is what
+    # keeps a silent segment from being hallucinated into text. speech_pad is
+    # generous on purpose — a tight pad eats the start of the sentence, which is
+    # exactly where Whisper loses the thread.
+    "stt_vad_filter": True,
+    "stt_vad_min_silence_ms": 300,
+    "stt_vad_speech_pad_ms": 400,
+    # Silero speech-probability threshold; "" = library default (0.5). Lower it
+    # (e.g. 0.35) if a quiet mic gets real speech filtered out entirely.
+    "stt_vad_threshold": "",
+    # Whisper's own silence detector. A segment it flags above this probability
+    # (and below the log-prob floor) is skipped instead of being decoded into
+    # "¡Gracias por ver el video!" — the hallucination it learned from subtitle
+    # corpora and emits when there is nothing to transcribe.
+    "stt_no_speech_threshold": 0.6,
     "search_provider": "searxng",
     # Default fallback chain — when the primary provider fails or
     # rate-limits, we try DuckDuckGo next. Free, no API key required, so
