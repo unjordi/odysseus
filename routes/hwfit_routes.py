@@ -190,6 +190,16 @@ def setup_hwfit_routes():
         host, ssh_port = _validate_detection_target(host, ssh_port)
         return detect_system(host=host, ssh_port=ssh_port, platform=platform, fresh=fresh)
 
+    @router.get("/live")
+    def get_live():
+        """Live host telemetry for the Host Stats panel: per-GPU utilization,
+        VRAM used, and temperature (nvidia-smi), CPU load %, RAM used, and the
+        model(s) currently resident in Ollama. Always LOCAL/in-container — the
+        panel polls the box serving Odysseus. Each section degrades on its own;
+        failures are reported under ``errors`` rather than raising."""
+        from services.hwfit.live import collect_live
+        return collect_live()
+
     @router.get("/models")
     def get_models(use_case: str = "", sort: str = "newest", limit: int = 50, search: str = "", host: str = "", quant: str = "", ctx: str = "", gpu_count: str = "", gpu_group: str = "", ssh_port: str = "", platform: str = "", fresh: bool = False, refresh_catalog: bool = False, manual_mode: str = "", manual_gpu_count: str = "", manual_vram_gb: str = "", manual_ram_gb: str = "", manual_backend: str = "", ignore_detected_gpu: bool = False, ignore_detected_ram: bool = False, fit_only: bool = False):
         """Rank LLM models against detected hardware and return scored results.
