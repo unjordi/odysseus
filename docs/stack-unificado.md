@@ -124,7 +124,15 @@ el error crudo de Docker (`address already in use`) no dice ni qué lo ocupa ni 
 - **axon → Ollama:** `AXON_OLLAMA_URL=http://ollama:11434` (API nativa, sin sufijo).
 - **Odysseus → Ollama:** `OLLAMA_BASE_URL=http://ollama:11434/v1` (API OpenAI-compat — **el `/v1` importa**;
   son dos contratos distintos contra el mismo motor).
-- **axon → host** (broker de terminal `:8799`, FreeToken `:7090`): `host.docker.internal:host-gateway`.
+- **axon → host** (FreeToken `:7090`, y el Ollama nativo si se corre sin el overlay):
+  `host.docker.internal:host-gateway`. Funciona porque **esos bindean `0.0.0.0`**.
+- **axon → broker de terminal:** **socket unix**,
+  `AXON_TERM_BROKER_URL=unix:/run/axon-term/term-broker.sock` (el volumen se monta por DIRECTORIO, no por
+  archivo). **No** va por `host.docker.internal:8799` — corregido el 2026-09-07: en Linux `host-gateway`
+  resuelve a la IP del host en `docker0` (172.17.0.1), no a loopback, y el broker bindea loopback ⇒ nunca
+  fue alcanzable (timeout en cada comando; FreeToken sí funcionaba, y esa fue la contraprueba). Tampoco se
+  resolvió abriendo el puerto: el broker ejecuta **comandos arbitrarios como el usuario**, sin whitelist.
+  Detalle: `axon/docs/terminal.md` § "Cómo alcanza el maincar CONTENERIZADO al broker del host".
 - El puerto **11434 se sigue publicando en el host** con el mismo bind `0.0.0.0` → todo lo que hoy habla
   con `localhost:11434` (el CLI `ollama`, axon nativo, scripts sueltos) sigue funcionando sin cambios.
 
@@ -284,7 +292,7 @@ menos útil. Las tres opciones y su precio:
 
 | opción | qué pasa | precio |
 |---|---|---|
-| **A. broker en el host (elegida)** | axon del contenedor le reenvía por `host.docker.internal:8799` con token | queda una pieza nativa — **resuelto**: no es de axon, es de `cortex` (abajo) |
+| **A. broker en el host (elegida)** | axon del contenedor le reenvía por **socket unix** con token (antes se documentó `host.docker.internal:8799`, que en Linux nunca funcionó — ver abajo) | queda una pieza nativa — **resuelto**: no es de axon, es de `cortex` (abajo) |
 | **B. broker dentro del contenedor** | shell del contenedor | **rompe la terminal en uso**: sin las herramientas del host, sin `~/code`, sin credenciales |
 | **C. contenedor con acceso al host** (`--pid=host`, `/` montado, docker.sock) | terminal "casi" del host | el contenedor deja de ser un límite: cualquier bug de axon es root en la máquina. **No** |
 
@@ -301,10 +309,25 @@ compu (hooks globales, servicios de usuario, config que no viaja por el git de u
 (`~/code/cortex`). Deja de ser "la excepción incómoda del stack de axon" y pasa a ser **un servicio de
 cortex** con su propio dueño, que es su naturaleza real.
 
-**Contrato, ya limpio:** axon-en-contenedor es un **cliente**. Habla con
-`host.docker.internal:8799` con token (`AXON_TERM_BROKER_URL` / `AXON_TERM_BROKER_TOKEN`) y **degrada solo**
-al shell del contenedor si el token no está. axon no instala, no arranca y no es dueño del broker. Nada del
-compose cambia con este traslado — por eso se puede decidir hoy y ejecutar en otra rebanada.
+**Contrato, ya limpio:** axon-en-contenedor es un **cliente**. Habla por el **socket unix** del broker
+(`AXON_TERM_BROKER_URL=unix:/run/axon-term/term-broker.sock` + `AXON_TERM_BROKER_TOKEN`) y **degrada solo**
+al shell del contenedor si el token no está. axon no instala, no arranca y no es dueño del broker.
+
+> **Corrección del 2026-09-07 (esto decía `host.docker.internal:8799` y la terminal estaba muerta).** Dos
+> cosas que este documento afirmaba y no eran ciertas:
+> 1. **El transporte.** En Linux `host-gateway` resuelve a la IP del host en `docker0` (172.17.0.1), no a
+>    loopback; el broker bindeaba `127.0.0.1` ⇒ timeout en cada comando. Bindear a la gateway tampoco
+>    alcanza: `ufw` está activo y descarta el tráfico contenedor→host. Y abrir el puerto sería exponer
+>    ejecución de comandos arbitrarios como el usuario. El transporte real es un **socket unix**, montado
+>    como volumen **por directorio** (un bind-mount de archivo se ata al inodo y muere al reiniciar el
+>    broker). Requiere una línea de `volumes:` — o sea que **sí cambia el compose**, contra lo que decía
+>    la frase anterior ("nada del compose cambia").
+> 2. **La degradación.** "Degrada solo al shell del contenedor" vale **sin token** (el usuario nunca pidió
+>    modo host). **Con** token y broker caído NO degrada: falla explícito, y el badge del widget lo dice
+>    (`host-down`). Caer al contenedor ahí sería correr los comandos en **otra máquina** en silencio.
+>
+> El porqué completo, con las mediciones: `axon/docs/terminal.md` § "Cómo alcanza el maincar CONTENERIZADO
+> al broker del host".
 
 **¿Cabe en cortex? Sí, y el patrón ya existe** (verificado leyendo `~/code/cortex`):
 
@@ -533,7 +556,10 @@ sin cargar modelos). Las **seis** combinaciones de overlays validan con `docker 
 7. **`git worktree add` desde el contenedor** — probar un `delegate` real; confirma que `/workspace/.git`
    es escribible con ese uid.
 8. **Que `/api/axon/version` reporte el sha de develop**, no `desconocido` (ahora lo compara el script solo).
-9. **La terminal del widget** sigue dando shell del host (requiere `AXON_TERM_BROKER_TOKEN` en el `.env`).
+9. **La terminal del widget** sigue dando shell del host. Requiere `AXON_TERM_BROKER_TOKEN` en el `.env`
+   **y** —desde el fix del 2026-09-07— un broker reiniciado con el socket unix y el directorio del socket
+   montado en el contenedor (`AXON_TERM_SOCKET_DIR`). Verde: el badge dice `host` (no `host-down`) y un
+   `whoami` devuelve el usuario del host, no `root`.
 10. **El CD entero (`--sin-publicar --solo-axon`)**, y esto solo se prueba de una forma: **con un push a
     `develop` de axon**. Lo que sí está comprobado sin mutar nada es que las seis combinaciones de
     banderas siguen resolviendo con `docker compose config`, que el modo CD resuelve

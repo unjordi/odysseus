@@ -99,11 +99,30 @@ services:
       # La ruta es la de DENTRO del contenedor; el bind de abajo la ata al mismo `data/` de Odysseus.
       - AXON_ODYSSEUS_DB=/odysseus-data/app.db
       - AXON_ODYSSEUS_OWNER=${AXON_ODYSSEUS_OWNER:-unjordi}
-      # Terminal: el widget ejecuta en el HOST como el usuario real, no como root dentro del contenedor.
-      # El broker (axon-term-broker.service, 127.0.0.1:8799) sigue en el host A PROPÓSITO — ver
-      # docs/stack-unificado.md § La terminal. Sin token, axon degrada al modo contenedor (shell del
-      # contenedor) sin fallar.
-      - AXON_TERM_BROKER_URL=${AXON_TERM_BROKER_URL:-http://host.docker.internal:8799}
+      # ── TERMINAL: el widget ejecuta en el HOST como el usuario real, no como root en el contenedor ──
+      # El broker (axon-term-broker.service) sigue NATIVO en el host a propósito — ver
+      # docs/stack-unificado.md § La terminal.
+      #
+      # ⚠️ EL TRANSPORTE ES UN SOCKET UNIX, NO UN PUERTO (arreglado 2026-09-07; antes esto decía
+      # `http://host.docker.internal:8799` y la terminal estaba MUERTA). Dos correcciones de fondo:
+      #
+      #  1. `host.docker.internal` NO alcanza un bind a loopback del host EN LINUX. Aquí `host-gateway`
+      #     resuelve a la IP del host en docker0 (172.17.0.1); el broker bindeaba 127.0.0.1 ⇒ timeout en
+      #     cada comando. (En Docker Desktop funciona porque el host es una VM — de ahí venía la creencia.)
+      #     Bindear a la gateway tampoco basta: `ufw` está activo y descarta el tráfico contenedor→host
+      #     (medido: listener en 172.23.0.1 responde desde el host y da timeout desde el contenedor).
+      #  2. Abrir un puerto habría sido peor. El broker corre COMANDOS ARBITRARIOS como el usuario del
+      #     host, SIN whitelist: un `--host 0.0.0.0` es un RCE en la LAN con el token como única barrera.
+      #     Un socket unix no tiene dirección de red — no lo alcanza la LAN, no lo toca el firewall, no
+      #     depende de IPs que cambian al recrear la red — y lo protegen los permisos del filesystem
+      #     (0600, dueño = el usuario del broker; este contenedor corre con el MISMO uid, ver `user:`).
+      #
+      # El token sigue siendo OBLIGATORIO. Sin token, axon degrada al modo contenedor (shell del
+      # contenedor) sin fallar. CON token y broker caído NO degrada: falla explícito y el badge del widget
+      # lo reporta como `host-down` — el shell del contenedor es OTRA máquina (root, /workspace, sin el
+      # PATH ni las llaves del usuario), y sustituirla en silencio es peor que el error. Ver el porqué
+      # completo en axon/docs/terminal.md § "Cómo alcanza el maincar CONTENERIZADO al broker del host".
+      - AXON_TERM_BROKER_URL=${AXON_TERM_BROKER_URL:-unix:/run/axon-term/term-broker.sock}
       - AXON_TERM_BROKER_TOKEN=${AXON_TERM_BROKER_TOKEN:-}
     volumes:
       # Repo sobre el que trabajan las tools de axon (`--dir /workspace`). RUTA IDÉNTICA a la que ya usa
@@ -115,6 +134,15 @@ services:
       # Cert wildcard *.pisa.mx del host, solo lectura. Mismas rutas que ya usa el despliegue vivo.
       - ${AXON_TLS_CERT:-${HOME}/.ssl/pisa.mx.fullchain.crt}:/certs/fullchain.crt:ro
       - ${AXON_TLS_KEY:-${HOME}/.ssl/pisa.mx.key}:/certs/privkey.key:ro
+      # SOCKET DEL BROKER DE LA TERMINAL — el transporte que reemplazó al puerto 8799 (ver AXON_TERM_BROKER_URL).
+      # ⚠️ SE MONTA EL DIRECTORIO, NO EL ARCHIVO. Un bind-mount de archivo se ata al INODO, y el broker
+      # recrea el socket en cada arranque: tras un `systemctl --user restart axon-term-broker` el contenedor
+      # le hablaría a un inodo muerto. MEDIDO el 2026-09-07: con el archivo montado, al recrear el socket el
+      # contenedor da ECONNREFUSED; con el directorio montado, sigue conectando sin recrear el contenedor.
+      # NO lleva `:ro`: conectarse a un socket unix exige permiso de ESCRITURA sobre él.
+      # El default calza con el default del broker ($XDG_RUNTIME_DIR/axon). Si `XDG_RUNTIME_DIR` no existe
+      # donde corre el compose, apunta AXON_TERM_SOCKET_DIR a donde el broker haya puesto el socket.
+      - ${AXON_TERM_SOCKET_DIR:-${XDG_RUNTIME_DIR:-/run/user/1000}/axon}:/run/axon-term
       # ── ESTADO PERSISTENTE DE AXON ──────────────────────────────────────────────────────────────
       # Sin esto, cada `up -d --build` borraría el estado del harness — el mismo drift que el
       # empaquetado viene a matar, con otra cara. Qué vive aquí:
@@ -141,8 +169,12 @@ services:
     # La imagen crea /axon-home ya con este dueño (ver Dockerfile de axon, ARG AXON_UID/AXON_GID).
     user: "${PUID:-1000}:${PGID:-1000}"
     extra_hosts:
-      # Para alcanzar lo que siga en el HOST: el broker de la terminal (:8799), FreeToken bajo demanda
-      # (:7090) y —si se corre sin el overlay de ollama— el Ollama nativo (:11434).
+      # Para alcanzar lo que siga en el HOST: FreeToken bajo demanda (:7090) y —si se corre sin el overlay
+      # de ollama— el Ollama nativo (:11434). Ambos bindean `0.0.0.0`, que es lo que hace que esta vía
+      # funcione (FreeToken es la contraprueba que destapó el bug del broker).
+      # ⚠️ El broker de la terminal YA NO va por aquí: bindea loopback y en Linux `host-gateway` resuelve a
+      # la IP del host en docker0 (172.17.0.1), no a loopback ⇒ nunca fue alcanzable. Va por socket unix
+      # (ver AXON_TERM_BROKER_URL y el volumen /run/axon-term de arriba).
       - "host.docker.internal:host-gateway"
     healthcheck:
       # QUÉ SIGNIFICA LISTO PARA AXON: que el servidor HTTP responde Y puede decir QUÉ COMMIT sirve.

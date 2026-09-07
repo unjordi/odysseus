@@ -4579,6 +4579,10 @@ body.bg-pattern-sparkles {
     }
     /* host = corre en tu compu (broker), no en el contenedor — acento distinto para que salte a la vista */
     .term-scope-badge.host { opacity:0.9; color:var(--green); border-color:var(--green); }
+    /* host-down = hay broker configurado pero NO responde ⇒ los comandos van a fallar (y NO se cae al shell
+       del contenedor: sería otra máquina). Rojo, no el gris de `container`: "no hay host" y "el host está
+       caído" son problemas distintos, y el segundo pide acción. */
+    .term-scope-badge.host-down { opacity:1; color:var(--red); border-color:var(--red); }
     .term-modal-body { flex:1; display:flex; flex-direction:column; min-height:0; gap:8px; }
     .term-output {
       flex:1; margin:0; padding:8px 10px;
