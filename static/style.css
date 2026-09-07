@@ -4435,6 +4435,48 @@ body.bg-pattern-sparkles {
     .code-runner-output,
     .doc-run-output { padding-right: 110px; }
 
+    /* Terminal widget (rail-term / tool-term-btn → #term-modal). Wider/taller than the default
+       .modal-content — a shell wants room — mirroring #cookbook-modal's own size override. */
+    #term-modal .modal-content {
+      width:min(760px, 92vw);
+      height:min(560px, 82vh);
+      max-height:82vh;
+    }
+    .term-scope-badge {
+      font-size:0.65em; font-weight:600; letter-spacing:0.02em; text-transform:uppercase;
+      opacity:0.6; border:1px solid var(--border); border-radius:4px;
+      padding:1px 5px; margin-left:6px; vertical-align:1px; cursor:help;
+    }
+    /* host = corre en tu compu (broker), no en el contenedor — acento distinto para que salte a la vista */
+    .term-scope-badge.host { opacity:0.9; color:var(--green); border-color:var(--green); }
+    .term-modal-body { flex:1; display:flex; flex-direction:column; min-height:0; gap:8px; }
+    .term-output {
+      flex:1; margin:0; padding:8px 10px;
+      overflow-y:auto; overflow-x:auto;
+      background:var(--bg); border:1px solid var(--border); border-radius:6px;
+      font-family:'Fira Code', 'Courier New', monospace;
+      font-size:0.85em; line-height:1.5;
+      white-space:pre-wrap; word-break:break-word;
+      color:var(--fg);
+    }
+    .term-output .term-stderr { color:var(--red); }
+    .term-output .term-cmd { color:var(--hl-function, #61afef); font-weight:600; }
+    .term-output .term-exit { opacity:0.6; font-style:italic; }
+    .term-input-row { display:flex; align-items:center; gap:6px; flex-shrink:0; }
+    .term-prompt { font-family:'Fira Code', 'Courier New', monospace; opacity:0.6; flex-shrink:0; }
+    .term-input {
+      flex:1; min-width:0;
+      font-family:'Fira Code', 'Courier New', monospace; font-size:0.9em;
+      background:var(--input-bg, var(--panel)); color:var(--fg);
+      border:1px solid var(--border); border-radius:6px; padding:6px 8px;
+    }
+    .term-run-btn, .term-stop-btn {
+      flex-shrink:0; font-size:12px; padding:6px 12px; border-radius:6px;
+      border:1px solid var(--border); background:var(--panel); color:var(--fg); cursor:pointer;
+    }
+    .term-run-btn:hover, .term-stop-btn:hover { border-color:var(--accent-primary, var(--red)); color:var(--accent-primary, var(--red)); }
+    .term-stop-btn { border-color:var(--red); color:var(--red); }
+
     .toast {
       position:fixed;
       top: 16px; right: 16px;
@@ -41649,3 +41691,90 @@ body.hoststats-compact-docked .chat-input-bar {
 
 /* Host Stats sits above other tool windows like Cookbook does. */
 #hoststats-modal { z-index: 262; }
+/* ─────────────────────────────────────────────────────────────────────────────────────────────
+   Añade esto a static/style.css (o a un <style>). Da tamaño concreto al contenedor del emulador para
+   que el widget pueda medir cols/rows. El resto del look del terminal lo trae xterm.css (vendored).
+   ───────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* El body del modal es una columna que llena el alto disponible; el emulador toma todo el espacio. */
+.term-modal-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;            /* deja que el hijo con overflow encoja dentro del flex */
+  height: 60vh;            /* alto por defecto del modal de terminal (ajústalo a tu layout) */
+}
+
+/* Nerd Font de la terminal (MesloLGSDZ Nerd Font MONO) — self-hosted en /static/lib/fonts (CSP 'self', sin CDN).
+   Variante MONO (ancho fijo): los glifos Nerd/powerline caben en UNA celda → sin desfase del prompt ni clip
+   del 1er ícono (la no-Mono los rendea más anchos que la celda y desalinea). La usa xterm.js (fontFamily). */
+@font-face {
+  font-family: 'MesloLGSDZ Nerd Font Mono';
+  font-weight: 400; font-style: normal; font-display: swap;
+  src: url('/static/lib/fonts/MesloLGSDZNerdFontMono-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'MesloLGSDZ Nerd Font Mono';
+  font-weight: 700; font-style: normal; font-display: swap;
+  src: url('/static/lib/fonts/MesloLGSDZNerdFontMono-Bold.woff2') format('woff2');
+}
+
+/* Contenedor del emulador xterm.js (modo PTY). Debe tener tamaño concreto ANTES de medir cols/rows. */
+#term-xterm.term-xterm {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  padding: 6px 8px;
+  box-sizing: border-box;
+  background: #1e1e2e;      /* calza con el theme.background de xterm en terminal.js */
+  overflow: hidden;         /* xterm maneja su propio scroll interno; nada asoma fuera del contenedor */
+}
+
+/* xterm posee AMBAS dimensiones: renderiza a cols*cellWidth × rows*cellHeight (múltiplos EXACTOS de celda),
+   así ni la última fila ni la última columna quedan a medias. Forzar width/height:100% estiraba la rejilla
+   más allá del múltiplo exacto → filas/columnas parciales. `terminal.js` mide el contenedor y fija cols/rows;
+   xterm rendea exacto y el sobrante (hasta ~1 celda + el gutter de la barra) muestra el fondo #1e1e2e, limpio.
+   NO volver a poner `#term-xterm .xterm { width/height: 100% !important }`. */
+
+/* Scrollbar SOLO cuando de verdad hay overflow. xterm.css fuerza overflow-y:scroll (barra siempre visible)
+   → lo bajamos a auto: sin scrollback que quepa, no hay barra.
+   `scrollbar-gutter: stable` reserva su carril SIEMPRE, aparezca o no la barra: así el ancho útil del texto
+   es CONSTANTE y `terminal.js` calcula las mismas cols en los dos estados. Sin esto la rejilla oscilaría
+   (sin barra → cabe una columna más → aparece la barra → la última columna queda tapada). */
+#term-xterm .xterm-viewport {
+  overflow-y: auto !important;
+  scrollbar-gutter: stable;
+  background-color: transparent !important;  /* xterm.css la ponía #000; deja ver el theme */
+  scrollbar-width: thin;                      /* Firefox: barra delgada */
+  scrollbar-color: rgba(205, 214, 244, 0.28) transparent;
+}
+/* WebKit/Blink: barra fina, overlay, discreta; el track transparente. */
+#term-xterm .xterm-viewport::-webkit-scrollbar { width: 8px; height: 8px; }
+#term-xterm .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
+#term-xterm .xterm-viewport::-webkit-scrollbar-thumb {
+  background: rgba(205, 214, 244, 0.24);
+  border-radius: 4px;
+}
+#term-xterm .xterm-viewport:hover::-webkit-scrollbar-thumb { background: rgba(205, 214, 244, 0.4); }
+
+/* Alt-screen (vim/top/claude TUI): sin scrollback → jamás scrollbar, área limpia como en la TUI real.
+   El gutter se CONSERVA (`stable`) a propósito: si se quitara, el ancho útil cambiaría al entrar/salir de la
+   alt-screen y la rejilla se recalcularía a media sesión de vim. */
+#term-xterm.term-alt-screen .xterm-viewport {
+  overflow-y: hidden !important;
+  scrollbar-width: none;
+}
+#term-xterm.term-alt-screen .xterm-viewport::-webkit-scrollbar { display: none; }
+
+/* Modo one-shot degradado: se comporta como el layout anterior (columna con <pre> + fila de input). */
+#term-oneshot.term-oneshot {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+#term-oneshot .term-output { flex: 1 1 auto; overflow: auto; min-height: 0; }
+
+/* Utilidad: respeta el hidden aunque el contenedor sea flex. */
+#term-xterm.hidden,
+#term-oneshot.hidden { display: none !important; }
+

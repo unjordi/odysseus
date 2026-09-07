@@ -39,6 +39,7 @@ import './js/modalManager.js?v=20260723compareicon2';
 // Desktop window tiling — drag a modal near an edge/corner to snap.
 import './js/tileManager.js';
 import themeModule from './js/theme.js';
+import terminalModule from './js/terminal.js';
 // IMPORTANT: import cookbook.js with NO ?v= query — the same plain specifier
 // every other importer (cookbook-hwfit.js / cookbook-diagnosis.js) uses. A query
 // mismatch makes the browser load cookbook.js twice as separate modules (two
@@ -729,6 +730,7 @@ function initializeEventListeners() {
         'rename-ai-modal': null,
         'custom-preset-modal': null,
         'memory-modal': null,
+        'term-modal': null,
       };
 
       // Dynamic modals (removed from DOM on close)
@@ -779,6 +781,7 @@ function initializeEventListeners() {
   const _modalSidebarMap = {
     'memory-modal': null,
     'theme-modal': null,
+    'term-modal': null,
   };
   const _dynamicModalIds = ['library-modal', 'archive-modal', 'doclib-modal', 'gallery-modal', 'tasks-modal'];
   function dismissModal(modal) {
@@ -1678,6 +1681,22 @@ function initializeEventListeners() {
       memoryModal.classList.remove('hidden');
       if (memoryModule && memoryModule.renderMemoryList) memoryModule.renderMemoryList();
       if (memoryModule && memoryModule.updateMemoryCount) memoryModule.updateMemoryCount();
+    });
+  }
+
+  // Sidebar Terminal button — widget que corre comandos en axon (POST /api/axon/term, streamed).
+  // Scope: contenedor del maincar, no el host — ver docs/terminal.md del repo axon.
+  const toolTermBtn = el('tool-term-btn');
+  const termModal = el('term-modal');
+  if (toolTermBtn && termModal) {
+    toolTermBtn.addEventListener('click', () => {
+      terminalModule.open();
+    });
+  }
+  const closeTermBtn = el('close-term-modal');
+  if (closeTermBtn && termModal) {
+    closeTermBtn.addEventListener('click', () => {
+      dismissModal(termModal);
     });
   }
 
