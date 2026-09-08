@@ -36,6 +36,10 @@ import adminModule from './js/admin.js?v=20260716openrouter3';
 import settingsModule from './js/settings.js?v=20260815approvalsave1';
 // Eagerly bind unified minimize/restore behavior across all tool modals.
 import './js/modalManager.js?v=20260723compareicon2';
+// Shell state (roadmap #29): the per-user record of which modules are open and
+// in which mode, plus the boot pass that puts them back after a reload or a
+// signout/signin.
+import { restoreWorkspace } from './js/workspaceRestore.js';
 // Desktop window tiling — drag a modal near an edge/corner to snap.
 import './js/tileManager.js';
 import themeModule from './js/theme.js';
@@ -4370,6 +4374,13 @@ function startOdysseusApp() {
     // failure; session-dependent routes must remain unopened without data.
     settleSessionHydration(null);
   }
+
+  // Put the workspace back: whatever modules the user left open reopen through
+  // their own launchers. Runs AFTER runDeferredRouteOpener so a deep link wins
+  // the race for a window it also targets (the pass skips anything already
+  // visible), and it is what arms the shell's state tracking — until it
+  // finishes, no "this is closed" is recorded over the state being restored.
+  setTimeout(() => { restoreWorkspace(); }, 400);
 
   const runNonCriticalStartup = (fn, delay = 4000) => {
     let tries = 0;
