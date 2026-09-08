@@ -23,10 +23,20 @@ def test_default_value_is_the_auto_sentinel():
 
 
 def test_saving_an_unrelated_setting_does_not_re_cap_the_budget(tmp_path, monkeypatch):
-    """End-to-end regression (WGlynn, #4121): changing ANY setting makes the
-    settings-save path persist the merged dict, which materializes the budget
-    default into settings.json. The budget must still AUTO-SCALE — it must not be
-    re-read as an explicit 6000 cap. This locks the exact reopening shut.
+    """End-to-end regression (WGlynn, #4121): guardar CUALQUIER ajuste no debe convertir
+    el presupuesto en un tope explícito de 6000. Tiene que seguir AUTO-ESCALANDO.
+
+    Ese candado se CONSERVA íntegro — es la última aserción de este test y sigue siendo
+    el requisito. Lo que cambió es la MECÁNICA que lo hacía difícil: el bug original era
+    que el guardado persistía el dict fusionado y materializaba el default del
+    presupuesto dentro de settings.json, donde podía re-leerse como una elección. Desde
+    que `save_settings` persiste solo los DELTAS contra DEFAULT_SETTINGS, esa
+    materialización ya no ocurre: el default no llega al archivo, así que no hay nada
+    que malinterpretar. El agujero se cerró un nivel más abajo que donde este test lo
+    vigilaba.
+
+    Por eso las aserciones sobre "el default quedó físicamente en el archivo" se
+    invierten: ahora se comprueba que NO está. El requisito de arriba no se toca.
     """
     settings_file = tmp_path / "settings.json"
     monkeypatch.setattr(settings, "SETTINGS_FILE", str(settings_file))
@@ -39,14 +49,16 @@ def test_saving_an_unrelated_setting_does_not_re_cap_the_budget(tmp_path, monkey
     settings.save_settings(merged)
     settings._settings_cache = None
 
-    # The budget default is now physically materialized into the file...
+    # El default del presupuesto YA NO llega al archivo: solo el cambio real del usuario.
     raw = json.loads(settings_file.read_text())
-    assert raw["agent_input_token_budget"] == DEFAULT_BUDGET
+    assert "agent_input_token_budget" not in raw, (
+        "el default se materializó otra vez: save_settings dejó de filtrar los deltas y el "
+        "agujero de #4121 vuelve a estar abierto un nivel más abajo"
+    )
     assert raw["search_result_count"] == 9
 
-    # ...yet it must read as AUTO (value == default), not an explicit cap — even
-    # though is_setting_overridden would report True for it now.
-    assert settings.is_setting_overridden("agent_input_token_budget") is True
+    # …y por lo tanto se lee como AUTO, sin depender de comparar contra el default.
+    assert settings.is_setting_overridden("agent_input_token_budget") is False
     soft = int(settings.get_setting("agent_input_token_budget", DEFAULT_BUDGET) or 0)
     assert budget_is_explicit(soft) is False
     # And the effective budget scales to the window rather than capping at 6000.

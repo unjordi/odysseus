@@ -291,9 +291,38 @@ def load_settings() -> dict:
 
 
 def save_settings(settings: dict):
-    """Persist settings to disk (atomic; see core.atomic_io)."""
+    """Persist ONLY what differs from the defaults (atomic; see core.atomic_io).
+
+    Los callers hacen `current = load_settings()` —que devuelve el dict COMPLETO, con cada default
+    materializado—, tocan dos llaves y guardan el resultado. Sin el filtro de abajo eso escribía las 70+
+    llaves, y el archivo dejaba de ser "lo que el usuario eligió" para volverse un SNAPSHOT de los
+    defaults del día en que se guardó. Como `load_settings` hace `{**DEFAULT_SETTINGS, **saved}`, ese
+    snapshot GANA para siempre: cuando el default del código cambia, el valor viejo sigue mandando y nada
+    lo señala.
+
+    Costó real (2026-09-07): el archivo en vivo pinaba `stt_model="large-v3"` cuando el código ya
+    apuntaba a `large-v3-turbo`, y `tts_provider="disabled"` con `tts-1`/`alloy` cuando el default ya era
+    el sidecar kokoro con voz `ef_dora`. Nadie los había elegido: eran los defaults de meses atrás,
+    fosilizados por un guardado. Se diagnosticó como "config del usuario" hasta comparar llave por llave.
+
+    Un valor IGUAL a su default no aporta información —`load_settings` lo repondría idéntico— así que se
+    omite y el archivo vuelve a decir solo lo que de verdad se decidió. Efecto lateral bueno:
+    `is_setting_overridden` se vuelve honesta (presente ⟺ distinto del default), que es justo lo que su
+    propio docstring advertía que la materialización rompía.
+
+    El caso aceptado, ya asumido en el código (ver la nota de `agent_input_token_budget`): quien fija a
+    propósito un valor idéntico al default no queda distinguible de quien no lo fijó. Para pinear algo
+    junto al default se usa un valor vecino.
+    """
     from core.atomic_io import atomic_write_json
-    atomic_write_json(SETTINGS_FILE, settings, indent=2)
+    # `RETIRED_SETTING_KEYS` se conserva tal cual venga: son lápidas que existen para que un archivo
+    # viejo siga cargando sin pérdida, y no tienen un default con el que compararlas de forma útil.
+    deltas = {
+        k: v
+        for k, v in settings.items()
+        if k in RETIRED_SETTING_KEYS or k not in DEFAULT_SETTINGS or v != DEFAULT_SETTINGS[k]
+    }
+    atomic_write_json(SETTINGS_FILE, deltas, indent=2)
     _invalidate_caches()
 
 
