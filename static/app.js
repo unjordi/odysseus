@@ -4422,31 +4422,39 @@ function startOdysseusApp() {
 	    const interimEl = statusEl ? statusEl.querySelector('.voice-flow-interim') : null;
 	    const stopBtn = document.getElementById('voice-flow-stop-btn');
 
-	    // The "Listening…" pill is drawn over the mic button instead of over the
-	    // message text. It can't simply live next to the button
-	    // (.chat-input-left is overflow:hidden and would clip it), so it stays a
-	    // child of .chat-input-top and we hand the CSS two offsets measured off
-	    // the button. Recomputed whenever it's shown and on resize, because the
-	    // toolbar reflows (buttons collapse) as the bar narrows.
+	    // The "Listening…" pill is drawn OVER the mic button, never over the message
+	    // text. The pill now lives in .chat-input-bottom — the mic's OWN row — so the
+	    // CSS handles the vertical placement by itself (top:50% centers it on the row)
+	    // and the only thing measured here is the HORIZONTAL offset of the button
+	    // inside that row. That is the point of the move: the previous attempt kept the
+	    // pill in .chat-input-top and derived `bottom` from the distance BETWEEN rows,
+	    // so any measurement it could not take fell back to the pill sitting on the
+	    // textarea — exactly the bug being reported. Now a missing measurement just
+	    // leaves it at left:0 of the toolbar row.
+	    //
+	    // Recomputed when it's shown, on window resize, and whenever the toolbar itself
+	    // reflows (initToolbarOverflow collapses buttons into the overflow menu as the
+	    // bar narrows, which slides the mic sideways without any window resize).
 	    const anchorHost = statusEl ? statusEl.parentElement : null;
 	    function anchorStatusToMic() {
-	      if (!statusEl || !anchorHost || statusEl.hidden) return;
+	      if (!statusEl || !anchorHost) return;
 	      const micRect = btn.getBoundingClientRect();
 	      const hostRect = anchorHost.getBoundingClientRect();
 	      if (!micRect.width || !hostRect.width) {
-	        // Mic collapsed or hidden — fall back to the CSS default placement.
+	        // No usable measurement (mic display:none, row not laid out yet): leave the
+	        // CSS default (left:0 of the toolbar row) instead of writing a bogus offset.
 	        statusEl.style.removeProperty('--voice-flow-anchor-x');
-	        statusEl.style.removeProperty('--voice-flow-anchor-bottom');
 	        return;
 	      }
 	      const x = Math.max(0, Math.round(micRect.left - hostRect.left));
-	      // Negative by construction: the toolbar row sits below
-	      // .chat-input-top. +3 centers the 22px pill on the ~28px button.
-	      const bottom = Math.round(hostRect.bottom - micRect.bottom) + 3;
 	      statusEl.style.setProperty('--voice-flow-anchor-x', x + 'px');
-	      statusEl.style.setProperty('--voice-flow-anchor-bottom', bottom + 'px');
 	    }
 	    window.addEventListener('resize', anchorStatusToMic);
+	    try {
+	      if (anchorHost && window.ResizeObserver) {
+	        new ResizeObserver(() => requestAnimationFrame(anchorStatusToMic)).observe(anchorHost);
+	      }
+	    } catch (_) { /* sin ResizeObserver quedan el resize de ventana y el anclaje al mostrar */ }
 
 	    function setActiveUI(active) {
 	      btn.classList.toggle('recording', active);

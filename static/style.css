@@ -2579,19 +2579,24 @@ body.bg-pattern-sparkles {
 	    .plan-mode-status-toggle:hover {
 	      background: color-mix(in srgb, var(--accent, var(--red)) 30%, transparent);
 	    }
-	    /* Whisper-flow dictation indicator — a pill anchored to the mic button
-	       (#voice-input-btn), NOT to the message box: it used to sit at the
-	       bottom-left of the textarea, covering the text being read/typed.
-	       app.js measures the button and sets the two vars below; the fallback
-	       values are that old bottom-left placement and are what gets used when
-	       the mic is collapsed out of a narrow toolbar (no button to anchor to).
-	       It stays a child of .chat-input-top (position:relative, nothing
-	       clipping it) instead of moving next to the button, because
-	       .chat-input-left is overflow:hidden and would cut the pill off. */
+	    /* Whisper-flow dictation indicator — píldora dibujada SOBRE el botón del
+	       micrófono (#voice-input-btn), no sobre la caja de mensaje.
+	       Vive en `.chat-input-bottom`, la MISMA fila que el micrófono (ver
+	       index.html). Eso es lo que arregla de raíz el intento anterior, que la
+	       dejaba en `.chat-input-top` y derivaba `bottom` de la distancia ENTRE
+	       filas:
+	         · el centrado vertical (top:50% + translateY) la clava en la fila del
+	           micro sin medir nada, así que el único offset que JS calcula es el
+	           HORIZONTAL;
+	         · si ese offset no se llega a calcular (el JS no corrió, o el micro no
+	           tiene medida), el default `left:0` la deja al inicio de la barra de
+	           herramientas — nunca encima del texto que se está transcribiendo, que
+	           era justo el fallback del diseño anterior. */
 	    .voice-flow-status {
 	      position: absolute;
 	      left: var(--voice-flow-anchor-x, 0px);
-	      bottom: var(--voice-flow-anchor-bottom, 2px);
+	      top: 50%;
+	      transform: translateY(-50%);
 	      z-index: 245;
 	      display: inline-flex;
 	      align-items: center;
@@ -2712,6 +2717,10 @@ body.bg-pattern-sparkles {
       justify-content: space-between;
       align-items: center;
       margin-top: 4px;
+      /* Bloque contenedor de `.voice-flow-status` (la píldora de dictado, que se
+         dibuja sobre el micrófono de esta misma fila). NO lleva overflow: la
+         píldora es más ancha que el botón y no debe recortarse. */
+      position: relative;
     }
     /* Progressive shrinkage: as the chat input bar gets narrow, sacrifice
        chrome before the typing area. First the Agent/Chat toggle drops out,
@@ -3332,6 +3341,25 @@ body.bg-pattern-sparkles {
       cursor: pointer;
       white-space: nowrap;
       transition: background 0.15s, color 0.15s, border-color 0.15s;
+      /* ANCHO DINÁMICO DE VERDAD: el control mide lo que mide el nombre.
+         El botón es inline-flex ⇒ su ancho ya lo dicta su contenido; lo único
+         que hace falta es que el ÚNICO límite sea el espacio REAL disponible,
+         no una cifra en px elegida a mano. Por eso el tope es relativo al
+         contenedor: `cqi` = 1% del inline-size de `.chat-input-bar` (el
+         container query de más arriba), que es la caja dentro de la que el
+         picker está posicionado — y que puede ser un split pane mucho más
+         angosto que la ventana.
+         Los dos términos del min():
+           · 70cqi  — manda en una barra normal: el picker jamás se come más de
+                      ~2/3 del renglón, aunque el id del modelo sea kilométrico.
+           · 100cqi - 24px — manda en barras diminutas (<~135px de contenido),
+                      donde 70% aún dejaría al picker pegado a los bordes.
+         Lo que se retira a propósito: el piso de 140px y el techo de 360px del
+         intento anterior. Un `clamp()` en px es un ancho fijo con dos topes: en
+         una barra ancha desperdiciaba el espacio sobrante y recortaba nombres
+         que SÍ cabían; en una angosta el piso lo empujaba fuera de la barra.
+         No hay ancho mínimo: un nombre corto ocupa lo corto. */
+      max-width: min(70cqi, calc(100cqi - 24px));
     }
     .model-picker-btn:hover {
       border-color: var(--border);
@@ -3339,17 +3367,12 @@ body.bg-pattern-sparkles {
       color: var(--fg);
     }
     .model-picker-btn #model-picker-label {
-      /* Content-width, capped — never a fixed width, or the next long model
-         name breaks it again. The label is already sized by its content
-         (inline-flex button); this only bounds it.
-         The cap follows the CHAT BAR (cqi = 1% of the .chat-input-bar
-         container's inline size), not the viewport: the picker is absolutely
-         positioned inside the bar, so the bar's width is what it can actually
-         spend, and the bar can be a split pane far narrower than the window.
-         Floor 140px fits the real names — "gpt-oss-120b", "claude-opus-5",
-         "qwen2.5vl:7b" — even in a narrow bar; the ellipsis stays for the
-         pathological ones (Anthropic's date-suffixed ids). */
-      max-width: clamp(140px, 45cqi, 360px);
+      /* El label es el ítem flex que ENCOGE cuando el tope de arriba muerde (el
+         chevron y el logo del proveedor no se encogen: flex-shrink:0). Sin
+         `min-width:0` un ítem flex no baja de su min-content y el ellipsis nunca
+         entraría en acción; con él, el nombre se recorta solo cuando de verdad
+         no cabe en la barra — y el id completo sigue en el `title` (#1982). */
+      min-width: 0;
       overflow: hidden;
       text-overflow: ellipsis;
     }
@@ -42156,7 +42179,16 @@ body.hoststats-compact-docked .chat-input-bar {
   flex: 1 1 auto;
   min-height: 0;
   width: 100%;
-  padding: 6px 8px;
+  /* SIN padding a la derecha, a propósito: el carril de la scrollbar ES ese padding.
+     `scrollbar-gutter: stable` (abajo) reserva 8 px SIEMPRE dentro de la caja de contenido,
+     aparezca o no la barra. Con `padding-right: 8px` el margen derecho real era
+     padding(8) + carril(8) ≈ 16 px contra 8 px a la izquierda, y esos 8 px extra valen
+     8/7.617 ≈ 1.05 CELDAS con la Nerd Font a 13 px: exactamente la columna que faltaba.
+     Dejando el padding derecho en 0, el carril hace de margen visual (8 px, simétrico con
+     la izquierda) y la rejilla recupera esa columna. `minRightGap` en `_measureGrid`
+     conserva ese respiro donde la plataforma usa scrollbars overlay y el carril mide 0
+     (macOS), así que ahí nada cambia. Vertical intacto: el alto ya calzaba. */
+  padding: 6px 0 6px 8px;
   box-sizing: border-box;
   background: #1e1e2e;      /* calza con el theme.background de xterm en terminal.js */
   overflow: hidden;         /* xterm maneja su propio scroll interno; nada asoma fuera del contenedor */
@@ -42172,7 +42204,9 @@ body.hoststats-compact-docked .chat-input-bar {
    → lo bajamos a auto: sin scrollback que quepa, no hay barra.
    `scrollbar-gutter: stable` reserva su carril SIEMPRE, aparezca o no la barra: así el ancho útil del texto
    es CONSTANTE y `terminal.js` calcula las mismas cols en los dos estados. Sin esto la rejilla oscilaría
-   (sin barra → cabe una columna más → aparece la barra → la última columna queda tapada). */
+   (sin barra → cabe una columna más → aparece la barra → la última columna queda tapada).
+   Ese carril es TAMBIÉN el margen derecho visual del texto — por eso `#term-xterm` va con
+   `padding-right: 0`: sumar padding + carril costaba ~1 celda de ancho útil. */
 #term-xterm .xterm-viewport {
   overflow-y: auto !important;
   scrollbar-gutter: stable;

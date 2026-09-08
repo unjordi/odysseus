@@ -266,20 +266,26 @@ function _measureGrid() {
   if (!cell) return null;
   const cs = getComputedStyle(xterm);
   const viewportEl = _term.element ? _term.element.querySelector('.xterm-viewport') : null;
-  // Ancho que la scrollbar le quita al texto. Con `scrollbar-gutter: stable` (ver style-additions.css) es
-  // CONSTANTE haya o no overflow → la rejilla no oscila al aparecer/desaparecer la barra.
+  // Ancho que la scrollbar le quita al texto. Con `scrollbar-gutter: stable` (ver `#term-xterm` en
+  // static/style.css) es CONSTANTE haya o no overflow → la rejilla no oscila al aparecer/desaparecer la barra.
   const scrollbarWidth = viewportEl ? Math.max(0, viewportEl.offsetWidth - viewportEl.clientWidth) : 0;
+  const padLeft = parseFloat(cs.paddingLeft) || 0;
   return {
     // clientWidth/Height = caja de padding, SIN bordes ni scrollbar propia: lo que de verdad se ve.
     boxWidth: xterm.clientWidth,
     boxHeight: xterm.clientHeight,
-    padLeft: parseFloat(cs.paddingLeft) || 0,
+    padLeft,
     padRight: parseFloat(cs.paddingRight) || 0,
     padTop: parseFloat(cs.paddingTop) || 0,
     padBottom: parseFloat(cs.paddingBottom) || 0,
     cellWidth: cell.width,
     cellHeight: cell.height,
     scrollbarWidth,
+    // El margen derecho lo hace el CARRIL de la scrollbar (el CSS deja `padding-right: 0` justo para que
+    // carril y padding no se sumen y se coman una columna). Donde la plataforma usa scrollbars OVERLAY el
+    // carril mide 0, así que se pide un respiro mínimo igual al padding IZQUIERDO: el texto queda
+    // simétrico en ambos casos, y en ninguno se reserva el espacio dos veces.
+    minRightGap: padLeft,
   };
 }
 
