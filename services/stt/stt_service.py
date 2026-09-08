@@ -10,6 +10,18 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Dict, Any
 
+# Model / language / glossary defaults are DEFINED in src/constants.py and only
+# re-exported here, so the names this module and its tests already use keep
+# working. They are not redeclared: this module's copy is not the one the
+# decoder ends up seeing (DEFAULT_SETTINGS wins, see the note over there), so a
+# second literal here can only rot into a fix that never ships — which is
+# precisely what happened to the initial_prompt.
+from src.constants import (
+    DEFAULT_STT_MODEL,
+    DEFAULT_STT_LANGUAGE,
+    DEFAULT_STT_INITIAL_PROMPT,
+)
+
 logger = logging.getLogger(__name__)
 
 # ── Local Whisper (faster-whisper) tuning ──
@@ -20,25 +32,6 @@ logger = logging.getLogger(__name__)
 # turns the whole clip into phonetic English ("to the boss"). So: language is
 # always pinned, never autodetected.
 #
-# Model choice — large-v3-turbo, NOT large-v3: turbo has 4 decoder layers
-# instead of 32, so it decodes ~5-8x faster with a quality loss that only shows
-# on long audio and low-resource languages. Dictation is neither (short clips,
-# Spanish is one of Whisper's best-covered languages), and on this CPU path the
-# real bottleneck is per-clip latency, not throughput. If turbo ever proves too
-# slow here, the fallback is `medium` — never back to `base`, which is where
-# ~80% of the jargon mangling came from.
-DEFAULT_STT_MODEL = "large-v3-turbo"
-DEFAULT_STT_LANGUAGE = "es"
-# A BARE TERM LIST, not a sentence. Whisper echoes its own prompt back when
-# there is no speech to transcribe: with the previous prose prompt
-# ("Transcripción de dictado técnico en español de México. Términos
-# frecuentes: ...") a mic left open produced "Términos frecuentes en español
-# de México." dozens of times. A comma-separated list still biases the
-# vocabulary but has no sentence for the decoder to complete.
-DEFAULT_STT_INITIAL_PROMPT = (
-    "Whisper, cuantización, MCP, endpoint, VRAM, faster-whisper, ctranslate2, "
-    "push-to-talk, latencia, commit, deploy, backend, axon, Odysseus."
-)
 # faster-whisper truncates initial_prompt at ~224 tokens silently; cap the
 # configurable value well under any pathological input.
 MAX_INITIAL_PROMPT_CHARS = 1000

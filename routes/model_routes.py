@@ -22,7 +22,11 @@ from core.middleware import require_admin
 from src.constants import COOKBOOK_STATE_FILE
 from src.llm_core import _detect_provider, _host_match, ANTHROPIC_MODELS
 from src.tls_overrides import llm_verify
-from src.settings import load_settings as _load_settings, save_settings as _save_settings
+from src.settings import (
+    load_settings as _load_settings,
+    save_settings as _save_settings,
+    DEFAULT_SETTINGS as _DEFAULT_SETTINGS,
+)
 from src.endpoint_resolver import (
     normalize_base as _normalize_base,
     build_chat_url,
@@ -33,9 +37,16 @@ from src.auth_helpers import _auth_disabled, effective_user, owner_filter
 
 logger = logging.getLogger(__name__)
 
+# Deleting a model endpoint that TTS/STT pointed at falls back to the shipped
+# default for that setting. The fallback is READ from DEFAULT_SETTINGS rather
+# than typed here: the literal that used to sit in this tuple was "base", so
+# removing an unrelated voice endpoint silently downgraded dictation to the
+# `base` Whisper model — the one the large-v3 upgrade existed to get away from,
+# and the source of most of the mangled tech jargon. A default written down in
+# two places is a default that will disagree with itself.
 _SPEECH_ENDPOINT_SETTINGS = (
-    ("tts_provider", "tts_model", "tts-1", "Text to Speech"),
-    ("stt_provider", "stt_model", "base", "Speech to Text"),
+    ("tts_provider", "tts_model", _DEFAULT_SETTINGS["tts_model"], "Text to Speech"),
+    ("stt_provider", "stt_model", _DEFAULT_SETTINGS["stt_model"], "Speech to Text"),
 )
 
 _ENDPOINT_SETTING_FIELDS = {

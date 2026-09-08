@@ -10,7 +10,13 @@ import time
 import logging
 from typing import Any
 
-from src.constants import SETTINGS_FILE, FEATURES_FILE
+from src.constants import (
+    SETTINGS_FILE,
+    FEATURES_FILE,
+    DEFAULT_STT_MODEL,
+    DEFAULT_STT_LANGUAGE,
+    DEFAULT_STT_INITIAL_PROMPT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,24 +77,20 @@ DEFAULT_SETTINGS = {
     # if a CUDA torch is present.
     "stt_enabled": True,
     "stt_provider": "local",
-    # large-v3-turbo, not large-v3: 4 decoder layers instead of 32, so it
-    # decodes several times faster with a quality loss that only shows on long
-    # audio and low-resource languages — dictation is neither (short clips,
-    # Spanish is one of Whisper's best-covered languages). `base` is where most
-    # of the mangled tech jargon came from; if turbo is ever too slow on a given
-    # box the step down is `medium`, never back to `base`.
-    "stt_model": "large-v3-turbo",
-    # NEVER "" (autodetection): on ~3s clips Whisper picks the language about as
-    # often as a coin flip and transcribes Spanish as phonetic English.
-    "stt_language": "es",
-    # Glossary prepended to each clip so tech terms don't come back
-    # hispanicized ("commit" -> "comit"). Editable; faster-whisper truncates
-    # past ~224 tokens silently.
-    "stt_initial_prompt": (
-        "Transcripción de dictado técnico en español de México. "
-        "Términos frecuentes: Whisper, cuantización, MCP, endpoint, "
-        "VRAM, faster-whisper, ctranslate2, push-to-talk, latencia, axon, Odysseus."
-    ),
+    # These three come from src/constants.py, which is also what the STT service
+    # and the voice-endpoint reset import. They used to be retyped here, and this
+    # dict is the copy that WINS (load_settings merges {**DEFAULT_SETTINGS,
+    # **saved}), so a value fixed anywhere else was dead code — which is exactly
+    # how the prose initial_prompt survived being "replaced" and kept echoing
+    # itself into transcripts. Do not inline a literal back into these.
+    "stt_model": DEFAULT_STT_MODEL,
+    "stt_language": DEFAULT_STT_LANGUAGE,
+    # Glossary prefixed to each clip so tech terms don't come back hispanicized
+    # ("commit" -> "comit"). A BARE TERM LIST on purpose — see the note in
+    # src/constants.py: prose here is regurgitated as transcription. Set it to ""
+    # in Settings to send no prompt at all. faster-whisper truncates past ~224
+    # tokens silently.
+    "stt_initial_prompt": DEFAULT_STT_INITIAL_PROMPT,
     # Voice-activity detection: drops non-speech before decoding, which is what
     # keeps a silent segment from being hallucinated into text. speech_pad is
     # generous on purpose — a tight pad eats the start of the sentence, which is
