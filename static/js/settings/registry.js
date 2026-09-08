@@ -70,6 +70,20 @@ export const SETTINGS_PANELS = Object.freeze([
     group: 'models',
     keywords: ['search', 'research', 'provider'],
   }),
+  // axon's own configuration (the local harness/brain that drives the agent
+  // loop). It closes the models group. It used to be a standalone rail widget
+  // exposing two knobs; the whole knob surface lives here now so there is a
+  // single home for it instead of a widget plus json/env vars on the side.
+  definePanel({
+    id: 'axon',
+    label: 'Axon',
+    group: 'models',
+    keywords: [
+      'axon', 'cerebro', 'brain', 'harness', 'agent', 'loop', 'local',
+      'ollama', 'planner', 'modo', 'mode', 'build', 'plan', 'config',
+      'env', 'frontier', 'offload',
+    ],
+  }),
 
   definePanel({
     id: 'integrations',

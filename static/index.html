@@ -776,8 +776,7 @@
     <!-- axon group — single launcher, opens the #axon-flyout submenu -->
     <button class="icon-rail-btn" id="rail-axon" title="axon" aria-haspopup="true" aria-expanded="false" aria-controls="axon-flyout"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="12" r="3"/><path d="M3.1 10.1 1.4 8.6M3 12H1.2M3.1 13.9 1.4 15.4"/><path d="M8.5 12h11"/><circle cx="13" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="20.5" cy="12" r="1.7" fill="currentColor" stroke="none"/></svg></button>
     <div style="flex:1"></div>
-    <!-- Static: bottom — Axon Config vive en el footer (config, junto a Settings), no en el grupo de plugins -->
-    <button class="icon-rail-btn" id="rail-axoncfg" title="Axon Config"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="currentColor" stroke="none"/></svg></button>
+    <!-- Static: bottom — la config de axon ya NO tiene launcher propio aquí: vive DENTRO de Settings (pestaña Axon) -->
     <button class="icon-rail-btn" id="rail-settings" title="Settings"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
   </div>
 
@@ -1032,7 +1031,10 @@
           <span class="grow">Terminal</span>
         </div>
 
-        <div class="list-item" id="tool-axoncfg-btn">
+        <!-- Axon Config ya NO abre un modal propio: es un PUNTERO a su única
+             casa, Settings › Axon (lo cablea axonConfig.js). El id se conserva
+             para no romper lo que ya lo referencia. -->
+        <div class="list-item" id="tool-axoncfg-btn" title="Abre Settings › Axon">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
             stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
             style="flex-shrink:0;opacity:0.5;">
@@ -1585,6 +1587,10 @@
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <span>Search</span>
           </button>
+          <button class="settings-nav-item" data-settings-tab="axon">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="currentColor" stroke="none"/></svg>
+            <span>Axon</span>
+          </button>
           <div class="settings-sidebar-divider"></div>
           <!-- Section 2: Comms (Integrations → Email → Reminders).
                Integrations leads here because it's where the underlying
@@ -1926,6 +1932,13 @@
             </div>
           </div>
         </div>
+
+        <!-- ═══ AXON TAB ═══
+             Panel VACÍO a propósito: axonConfig.js lo pinta completo desde el
+             schema que publica axon (GET /api/axon/config), así una perilla
+             nueva del harness aparece aquí sin tocar este HTML. La carga es
+             perezosa (settings.js → onSettingsPanelActivated('axon')). -->
+        <div data-settings-panel="axon" class="axoncfg-panel hidden"></div>
 
         <!-- ═══ APPEARANCE TAB ═══ -->
         <div data-settings-panel="appearance" class="settings-appearance-panel hidden">
@@ -2661,30 +2674,10 @@
   <!-- Toast container (aria-live for screen readers) -->
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-<!-- ── Axon Config panel (configura el cerebro/modo de axon sin escarbar env vars) ── -->
-<div id="axoncfg-modal" class="modal hidden">
-  <div class="modal-content axoncfg-content" role="dialog" aria-label="Axon Config">
-    <div class="modal-header">
-      <h4><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="currentColor" stroke="none"/></svg>Axon Config</h4>
-      <button class="close-btn" id="close-axoncfg-modal" aria-label="Close axon config">✖</button>
-    </div>
-    <div class="modal-body axoncfg-body">
-      <div class="axoncfg-row">
-        <label for="axoncfg-model">Cerebro (modelo local)</label>
-        <select id="axoncfg-model"></select>
-      </div>
-      <div class="axoncfg-row">
-        <label for="axoncfg-mode">Modo</label>
-        <select id="axoncfg-mode">
-          <option value="build">build — todas las tools</option>
-          <option value="plan">plan — solo lectura</option>
-        </select>
-      </div>
-      <div class="axoncfg-ollama" id="axoncfg-ollama"></div>
-      <div class="axoncfg-status" id="axoncfg-status"></div>
-    </div>
-  </div>
-</div>
+<!-- ── Axon Config ── El modal propio se RETIRÓ (#32): esta config vive ahora
+     dentro de Settings › Axon, que axonConfig.js pinta desde el schema de axon.
+     El módulo se sigue cargando aquí para cablear el puntero #tool-axoncfg-btn
+     y exponer window.axonConfig.open(). -->
 <script type="module" src="/static/js/axonConfig.js"></script>
 
 <!-- ── Cortex panel (estado de la cuota/ventana de 5h de Claude en el HOST) ──

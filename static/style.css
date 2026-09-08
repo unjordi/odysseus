@@ -41616,21 +41616,6 @@ body.settings-sidebar-resize-active {
   pointer-events: auto;
 }
 
-/* ============================================================
-   AXON CONFIG panel — configura el cerebro (modelo local) y el modo de axon.
-   Look de panel nativo (no reactor-console): mismos tokens de tema que el
-   resto del fork (--fg/--bg/--panel/--border/--accent-*), así respeta
-   claro/oscuro sin CSS aparte por tema.
-   ============================================================ */
-.axoncfg-content {
-  width: min(420px, 92vw);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  display: flex;
-  flex-direction: column;
-  pointer-events: auto;
-}
 .hoststats-header { align-items: center; }
 .hoststats-header h4 { color: var(--fg); }
 .hoststats-header-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
@@ -41870,38 +41855,221 @@ body.hoststats-compact-docked .chat-input-bar {
 
 /* Host Stats sits above other tool windows like Cookbook does. */
 #hoststats-modal { z-index: 262; }
-.axoncfg-body {
-  padding: 16px;
+
+/* ============================================================
+   AXON — panel de configuración de axon DENTRO de Settings (#32).
+   Ya no es un modal propio: es la pestaña "Axon" de las Settings generales, y
+   lo pinta axonConfig.js desde el schema que publica axon (~110 perillas). Por
+   eso el CSS de aquí es de FILAS densas, no de chrome de ventana: reusa
+   .admin-card y los tokens de tema del resto de las Settings
+   (--bg/--panel/--border/--fg/--red/--accent), así respeta claro/oscuro sin
+   una hoja aparte por tema.
+   ============================================================ */
+
+/* El contenedor del panel: axonConfig.js lo llena entero. */
+.axoncfg-panel { min-width: 0; }
+
+/* Barra de búsqueda + acciones. Pegada arriba porque el panel es largo. */
+.axoncfg-toolbar {
   display: flex;
-  flex-direction: column;
-  gap: 14px;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 6px 0 8px;
+  margin-bottom: 4px;
+  background: var(--bg);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 }
-.axoncfg-row {
+.axoncfg-search {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.axoncfg-actions {
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 6px;
+  flex-shrink: 0;
 }
-.axoncfg-row label {
+.axoncfg-dirty-count {
+  font-size: 11px;
+  color: var(--red, #e06c75);
+  font-weight: 600;
+}
+
+.axoncfg-btn {
+  padding: 5px 10px;
+  font-family: inherit;
   font-size: 12px;
-  letter-spacing: 0.3px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel);
   color: var(--fg);
+  cursor: pointer;
+  transition: border-color 0.15s, opacity 0.15s;
+}
+.axoncfg-btn:hover:not(:disabled) { border-color: var(--accent, var(--fg)); }
+.axoncfg-btn:disabled { opacity: 0.4; cursor: default; }
+.axoncfg-btn-primary { border-color: color-mix(in srgb, var(--accent, var(--fg)) 60%, transparent); }
+.axoncfg-btn-ghost {
+  background: transparent;
+  font-size: 11px;
+  padding: 4px 8px;
   opacity: 0.75;
 }
-.axoncfg-row select {
-  width: 100%;
+
+/* Banner de persistencia: dónde vive el archivo, cuándo se escribió y —fuerte—
+   el error de escritura, que es LO que el panel viejo callaba. */
+.axoncfg-persist-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
 }
+.axoncfg-persist-line .admin-toggle-sub { margin-top: 0; }
 .axoncfg-ollama {
   font-size: 11px;
-  color: var(--fg);
-  opacity: 0.6;
+  color: color-mix(in srgb, var(--fg) 60%, transparent);
+  margin-top: 4px;
 }
+
+/* Línea de estado (compartida por el banner y el reporte de guardado). */
 .axoncfg-status {
   font-size: 12px;
   min-height: 1.4em;
-  color: var(--accent-primary, var(--fg));
+  margin: 4px 0 8px;
+  color: color-mix(in srgb, var(--fg) 70%, transparent);
+}
+.axoncfg-status-ok { color: var(--accent, var(--fg)); }
+.axoncfg-status-warn {
+  color: var(--fg);
+  font-weight: 600;
 }
 .axoncfg-status-error {
   color: var(--red, #e06c75);
+  font-weight: 600;
+}
+
+/* Un grupo del schema = una .admin-card. */
+.axoncfg-group > h2 { margin-bottom: 6px; }
+.axoncfg-knobs {
+  display: flex;
+  flex-direction: column;
+}
+.axoncfg-knob {
+  padding: 8px 0;
+  border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+}
+.axoncfg-knobs > .axoncfg-knob:first-child { border-top: none; }
+.axoncfg-knob-dirty {
+  box-shadow: inset 2px 0 0 var(--red, #e06c75);
+  padding-left: 8px;
+}
+
+.axoncfg-knob-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 5px;
+}
+.axoncfg-knob-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.axoncfg-knob-ctl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.axoncfg-knob-ctl .axoncfg-input { flex: 1 1 auto; min-width: 0; }
+.axoncfg-textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  resize: vertical;
+}
+.axoncfg-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  cursor: pointer;
+  color: color-mix(in srgb, var(--fg) 80%, transparent);
+}
+.axoncfg-readonly { opacity: 0.6; cursor: not-allowed; }
+
+.axoncfg-knob-help { margin-top: 4px; }
+.axoncfg-knob-site {
+  margin-top: 2px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: color-mix(in srgb, var(--fg) 38%, transparent);
+}
+
+/* Chips: procedencia del valor efectivo, ámbito, y qué pasa al guardarlo. */
+.axoncfg-chip {
+  font-size: 9.5px;
+  line-height: 1.5;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+  white-space: nowrap;
+}
+.axoncfg-src-persistido {
+  color: var(--accent, var(--fg));
+  border-color: color-mix(in srgb, var(--accent, var(--fg)) 45%, transparent);
+}
+.axoncfg-src-entorno { color: color-mix(in srgb, var(--fg) 75%, transparent); }
+.axoncfg-src-default { opacity: 0.7; }
+.axoncfg-chip-ro { border-style: dashed; }
+.axoncfg-chip-secret { letter-spacing: 0.5px; }
+.axoncfg-chip-hot {
+  color: var(--accent, var(--fg));
+  border-color: color-mix(in srgb, var(--accent, var(--fg)) 45%, transparent);
+}
+.axoncfg-chip-restart,
+.axoncfg-chip-pending {
+  color: var(--red, #e06c75);
+  border-color: color-mix(in srgb, var(--red, #e06c75) 45%, transparent);
+}
+.axoncfg-env {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  color: color-mix(in srgb, var(--fg) 72%, transparent);
+  word-break: break-all;
+}
+
+/* Avanzadas: colapsadas por default; la búsqueda las revela (ver applyFilter). */
+.axoncfg-advanced { margin-top: 8px; }
+.axoncfg-advanced > summary {
+  cursor: pointer;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  color: color-mix(in srgb, var(--fg) 60%, transparent);
+  padding: 4px 0;
+  user-select: none;
+}
+.axoncfg-advanced > summary:hover { color: var(--fg); }
+
+/* Filtro de búsqueda y estado ocupado. */
+.axoncfg-hidden { display: none !important; }
+.axoncfg-busy { opacity: 0.6; pointer-events: none; }
+
+.axoncfg-unavailable .axoncfg-btn { margin-top: 8px; }
+
+@media (max-width: 600px) {
+  .axoncfg-knob-ctl { flex-wrap: wrap; }
+  .axoncfg-actions { width: 100%; justify-content: flex-end; }
 }
 
 /* ============================================================
