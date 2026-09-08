@@ -18,6 +18,16 @@
 kokoro==0.9.4; python_version >= "3.11" and python_version < "3.13"
 soundfile; python_version >= "3.11" and python_version < "3.13"
 
+# Live regeneration of the HW Fit model catalog (Cookbook -> Scan/Download ->
+# "Update via whichllm"). whichllm (MIT) fetches models from the HuggingFace API
+# and ranks them against public benchmark leaderboards, so the catalog stops
+# being whatever was frozen into services/hwfit/data/hf_models.json. Optional on
+# purpose: without it HW Fit still ranks against the bundled catalog offline and
+# the button says it is not installed instead of failing. Consumed as a CLI
+# (`whichllm --json`) — it exposes no library API and no HTTP service — so
+# `uvx whichllm@latest` / `pipx run whichllm` satisfy it too, with no rebuild.
+whichllm
+
 # DuckDuckGo as a search provider option.
 # Install if you want DDG in the search-provider dropdown.
 # Alternatives: SearXNG, Brave, Tavily, Serper, Google PSE.

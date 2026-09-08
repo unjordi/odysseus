@@ -1,6 +1,6 @@
 # Cookbook And Hardware Fit
 
-Last updated: dev@e71f8ce | 2026-08-25
+Last updated: dev@e406aac | 2026-09-07
 
 ## Scope
 
@@ -13,9 +13,9 @@ This spec covers model setup/serving and hardware fit in:
 - Cookbook package/rebuild/shell integration in `routes/shell_routes.py`;
 - `routes/cookbook_helpers.py`;
 - `routes/hwfit_routes.py`;
-- `services/hwfit/*` and `services/hwfit/data/hf_models.json`;
+- `services/hwfit/*`, the bundled catalog `services/hwfit/data/hf_models.json` and its seal `services/hwfit/data/hf_models.meta.json`;
 - durable Cookbook state through `routes.cookbook_helpers.COOKBOOK_STATE_FILE`;
-- helper/CLI scripts `scripts/odysseus-cookbook`, `scripts/add_hwfit_models.py`, `scripts/hf_download.py`, and `scripts/diffusion_server.py`;
+- helper/CLI scripts `scripts/odysseus-cookbook`, `scripts/add_hwfit_models.py`, `scripts/refresh_whichllm_catalog.py`, `scripts/hf_download.py`, and `scripts/diffusion_server.py`;
 - Docker overlays `docker-compose.gpu-*.yml`, `docker/gpu.*.yml`, `docker/host-docker.yml`, `scripts/check-docker-gpu.sh`, and `scripts/check-docker-amd-gpu.sh`;
 - frontend modules `static/js/cookbook*.js`, including Cookbook running, serve, download, diagnosis, progress, and HW Fit modules;
 - tests covering Cookbook helpers, routes, CLI state, package detection, frontend progress, HW Fit services, serve profiles, Docker GPU overlays, and GPU diagnostic scripts.
@@ -163,6 +163,56 @@ non-numeric `gpu_count` values from callers. Model normalization also treats
 non-string `parameter_count` and quantization fields as unknown rather than
 calling string methods and aborting the ranking pass. Catalog drift and dynamic
 latest-model metadata are separate sources of recommendation drift.
+
+### Catalog Provenance And On-Demand Regeneration (whichllm)
+
+The bundled catalog is FROZEN: it ages with no signal on screen, and a model
+published after the freeze simply does not exist for the Cookbook. Two pieces
+address that, and neither removes the offline path.
+
+**The seal.** `services/hwfit/data/hf_models.meta.json` records when the bundled
+catalog was frozen, how that date was derived, and that it is the offline
+source. `services.hwfit.models.bundled_catalog_meta()` reads it and falls back
+to the newest `release_date` in the catalog if the file is gone.
+`hf_discovery.hf_collection_cache_meta()` / `mlx_community_cache_meta()` report
+the same for the collection feeds (`fetched_at`, count, TTL freshness).
+`GET /api/hwfit/catalog-status` returns one row per source plus `active_total`,
+and the Cookbook → Scan/Download strip (`#hwfit-catalog-bar`) prints it, so the
+UI states the date instead of implying freshness it does not have.
+
+**The refresh.** `services/hwfit/whichllm_catalog.py` regenerates the catalog
+from `whichllm` (MIT, PyPI `whichllm`, https://github.com/Andyyyy64/whichllm),
+which fetches models live from the HuggingFace API and ranks them against
+public benchmark leaderboards. whichllm exposes **no library API and no HTTP
+service**: the supported machine-readable contract is the CLI's `--json`, so
+this module shells out. Notes that matter:
+
+- **Runner resolution, in order:** `ODYSSEUS_WHICHLLM_CMD`, `python -m whichllm`,
+  `whichllm` on PATH, `uvx whichllm@latest`, `uv tool run`, `pipx run`. The
+  container image ships without it, so `uvx`/`pipx` let the button work with no
+  rebuild; `whichllm` is listed in `requirements-optional.txt`.
+- **Output is parsed defensively.** whichllm prints through `rich`, which emits
+  SGR escapes and soft-wraps even when stdout is a pipe. Runs force
+  `NO_COLOR=1 TERM=dumb COLUMNS=1000` and strip ANSI before parsing.
+- **Hardware-independent by construction.** The catalog must not depend on the
+  box that pressed the button, so the refresh asks whichllm for a broad list
+  under a roomy simulated GPU (`ODYSSEUS_WHICHLLM_GPU`, default `H200`;
+  `ODYSSEUS_WHICHLLM_TOP`, default 400). HW Fit still ranks against the real
+  hardware itself.
+- **Sealed output.** `DATA_DIR/hwfit/whichllm_models.json` carries
+  `generated_at`, `whichllm_version`, `runner`, the exact `command`, the
+  simulated GPU and the count — never bare rows.
+- **Additive merge.** whichllm rows contribute models the freeze never had; for
+  models both know, the curated row wins and only the stale parts are overlaid
+  (download count, a missing release date, benchmark evidence under a
+  `whichllm` key). `context_length` is deliberately NOT mapped — whichllm's
+  JSON has no max-context field and inventing one would poison the VRAM math.
+- **Opt-in only.** `refresh_catalog=1` on `/api/hwfit/models` still refreshes
+  only the HF collection feeds. whichllm runs from
+  `POST /api/hwfit/catalog/refresh?source=whichllm` (the button) or
+  `scripts/refresh_whichllm_catalog.py`. When whichllm is missing or the run
+  fails the endpoint returns 503, the button says so, and ranking continues
+  against the bundled catalog.
 
 ## Security Policy
 

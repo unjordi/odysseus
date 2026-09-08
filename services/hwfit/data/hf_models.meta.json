@@ -1,0 +1,10 @@
+{
+  "source": "repo-frozen",
+  "label": "Bundled catalog",
+  "sealed_at": "2026-07-01",
+  "sealed_at_derived_from": "last git commit that touched services/hwfit/data/hf_models.json (0b4ef71, 2026-07-01)",
+  "newest_model_release_date": "2026-06-27",
+  "count": 924,
+  "offline": true,
+  "note": "This catalog ships in the repo and is the OFFLINE fallback: HW Fit works with no network using only these entries. It does not refresh itself — update the seal in the same commit whenever hf_models.json is regenerated, or the UI will report a date that lies."
+}

@@ -9,7 +9,7 @@ import { providerLogo } from './providers.js';
 import { makeWindowDraggable } from './windowDrag.js';
 import { _diagnose, _showDiagnosis, _clearDiagnosis, _runQuickCmd, ERROR_PATTERNS } from './cookbook-diagnosis.js';
 import { RECIPE_BACKENDS, recipesForBackend, pickRecipe, recipeCommands, RECIPE_DEFAULT_VARIANT } from './cookbook-deps-recipes.js';
-import { _hwfitCache, _hwfitDebounce, _hwfitFetch, _hwfitInit, _hwfitRenderList, _hwfitRenderHw, _renderGpuToggles, _expandModelRow, _fitColors, _hwfitColumns, _cachedModelIds, _gpuToggleTotal, _resetGpuToggleState } from './cookbook-hwfit.js';
+import { _hwfitCache, _hwfitDebounce, _hwfitFetch, _hwfitInit, _hwfitRenderList, _hwfitRenderHw, _renderGpuToggles, _expandModelRow, _fitColors, _hwfitColumns, _cachedModelIds, _gpuToggleTotal, _resetGpuToggleState, _bindHwfitCatalogBar } from './cookbook-hwfit.js';
 
 // Sub-modules
 import {
@@ -2154,6 +2154,8 @@ function _wireTabEvents(body) {
     hwRefreshBtn.addEventListener('click', _refreshScanDownloadTarget);
   }
 
+  _bindHwfitCatalogBar();
+
   const hwAdvancedBtn = document.getElementById('hwfit-advanced-btn');
   const hwAdvancedPanel = document.getElementById('hwfit-advanced-panel');
   if (hwAdvancedBtn && hwAdvancedPanel && !hwAdvancedBtn.dataset.bound) {
@@ -3168,6 +3170,14 @@ function _renderRecipes() {
   html += '<button type="button" class="hwfit-hw-manual-clear">× Clear</button>';
   html += '</div>';
   html += '<div id="hwfit-hw-row" style="display:none;align-items:center;gap:4px;margin-top:3px;padding-top:2px;"><span style="font-size:10px;padding:2px 8px;border-radius:10px;background:color-mix(in srgb, var(--fg) 8%, transparent);color:var(--fg);opacity:0.7;white-space:nowrap;flex-shrink:0;position:relative;top:-1px;">Detected hardware</span><div class="hwfit-hw" id="hwfit-hw" style="flex:1;"></div></div>';
+  // Catalog provenance strip — says WHEN the model list you're looking at was
+  // sealed and from where, with the button that regenerates it live through
+  // whichllm. Without this the frozen repo catalog ages invisibly.
+  html += '<div class="hwfit-catalog-bar" id="hwfit-catalog-bar" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:5px;font-size:10.5px;opacity:0.75;">';
+  html += '<span id="hwfit-catalog-summary">Catalog: …</span>';
+  html += '<button type="button" class="hwfit-gpu-btn" id="hwfit-catalog-refresh" style="height:22px;padding:0 8px;font-size:10px;" title="Re-rank the catalog live from HuggingFace + public benchmarks via whichllm. The bundled catalog stays as the offline fallback.">⟳ Update via whichllm</button>';
+  html += '<span id="hwfit-catalog-msg" style="opacity:0.8;"></span>';
+  html += '</div>';
   html += '<div class="hwfit-list" id="hwfit-list"></div>';
   // Footer: link to the public discussion where users can request additions
   // to the curated model list. Sits below the list so it reads as a callout
