@@ -160,10 +160,45 @@ services:
       - -c
       - |
         set -eu
-        if [ ! -s /etc/searxng/settings.yml ] || grep -q 'odysseus-local-searxng-json-2026-05-30\|__SEARXNG_SECRET__' /etc/searxng/settings.yml; then
+        # MARCA DE VERSIÓN de la plantilla. Tiene que ser IDÉNTICA a la línea
+        # `odysseus-searxng-config:` de config/searxng/settings.yml. Mientras el archivo que ya vive
+        # en el volumen no la traiga, se RESIEMBRA desde la plantilla.
+        #
+        # POR QUÉ: /etc/searxng es un volumen con nombre (`searxng-data`) y ES la config efectiva. El
+        # `if` de antes solo sembraba cuando el archivo estaba vacío o todavía tenía el placeholder del
+        # secreto — o sea, la PRIMERA vez. Después de eso, editar config/searxng/settings.yml no tenía
+        # NINGÚN efecto: el volumen se quedaba con la config vieja para siempre. Fue justo lo que dejó
+        # a la instancia con el set de motores de fábrica (google/duckduckgo/brave/startpage, los cuatro
+        # bloqueados desde esta IP) devolviendo 200 con cero resultados.
+        #
+        # Como esta marca vive en el `entrypoint`, cambiarla también cambia la config del servicio, así
+        # que el siguiente `docker compose up -d` RECREA searxng solo — no hace falta ningún paso manual
+        # ni tocar el volumen a mano.
+        marca='odysseus-searxng-config: 2026-09-07-motores'
+        resembrar=0
+        [ -s /etc/searxng/settings.yml ] || resembrar=1
+        if [ "$$resembrar" = 0 ] && grep -q 'odysseus-local-searxng-json-2026-05-30\|__SEARXNG_SECRET__' /etc/searxng/settings.yml; then
+          resembrar=1
+        fi
+        if [ "$$resembrar" = 0 ] && ! grep -qF "$$marca" /etc/searxng/settings.yml; then
+          resembrar=1
+        fi
+        if [ "$$resembrar" = 1 ]; then
           secret="$${SEARXNG_SECRET:-}"
+          # Un resiembre NO rota el secreto: se reusa el que ya está en el volumen. Rotarlo invalidaría
+          # las preferencias firmadas de quien ya venía usando la instancia, y no hay motivo para pagar
+          # eso solo porque cambió la lista de motores.
+          if [ -z "$$secret" ] && [ -s /etc/searxng/settings.yml ]; then
+            secret="$$(sed -n 's/^ *secret_key: *//p' /etc/searxng/settings.yml | head -n1 | tr -d '"')"
+            if [ "$$secret" = '__SEARXNG_SECRET__' ]; then secret=''; fi
+          fi
           if [ -z "$$secret" ]; then
             secret="$$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+          fi
+          # Nada se pierde en el camino: lo que hubiera queda al lado antes de sobrescribir. SearXNG
+          # solo lee `settings.yml` de esta carpeta, así que un `settings.yml.previo-…` no le estorba.
+          if [ -s /etc/searxng/settings.yml ]; then
+            cp /etc/searxng/settings.yml "/etc/searxng/settings.yml.previo-$$(date +%Y%m%d%H%M%S)"
           fi
           sed "s|__SEARXNG_SECRET__|$$secret|g" /tmp/searxng-settings.yml.template > /etc/searxng/settings.yml
         fi

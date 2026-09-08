@@ -1,9 +1,142 @@
+# ── Plantilla de settings.yml de SearXNG para Odysseus ──────────────────────────────────────────────
+#
+# odysseus-searxng-config: 2026-09-07-motores
+#
+# ESA LÍNEA DE ARRIBA ES LA MARCA DE VERSIÓN, y es funcional, no decorativa: el entrypoint del servicio
+# `searxng` en docker-compose.yml resiembra /etc/searxng/settings.yml (el volumen `searxng-data`, que es
+# la config EFECTIVA) cuando el archivo que ya vive ahí no contiene esta marca exacta. Sin ella, editar
+# esta plantilla NO tiene ningún efecto sobre un volumen ya sembrado: el entrypoint solo sembraba en la
+# primera arrancada y el resto de las veces se quedaba con lo que hubiera. Al cambiar cualquier cosa de
+# este archivo, SUBE LA MARCA (y la copia gemela del `if` del entrypoint) o el cambio no llega.
+# El secreto YA sembrado se conserva en el resiembre, y el archivo anterior se respalda al lado.
+
 use_default_settings: true
 
 server:
   secret_key: "__SEARXNG_SECRET__"
 
 search:
+  # `json` es la única forma en que Odysseus consume SearXNG (services/search/providers.py).
   formats:
     - html
     - json
+
+# NO se pone `outgoing.max_request_timeout` a propósito: ese techo es POR BÚSQUEDA y se aplica al motor
+# más lento de la consulta, sea de la categoría que sea (searx/search/__init__.py). Ponerlo recortaría
+# en silencio a motores de categorías que Odysseus no usa y que nadie midió aquí (crossref pide 30 s,
+# gentoo 10 s, openlibrary 10 s). Los `timeout:` por motor de abajo ya acotan lo que sí se consulta.
+
+# ── MOTORES ─────────────────────────────────────────────────────────────────────────────────────────
+#
+# POR QUÉ EXISTE ESTA SECCIÓN: sin ella se heredan los defaults de SearXNG, y desde esta IP el set por
+# defecto de la categoría `general` (google + duckduckgo + brave + startpage) devuelve CERO. La API
+# contestaba 200 con `"results": []` — un 200 vacío, que es peor que un error, porque nadie lo ve.
+#
+# MEDIDO el 2026-09-07 contra la instancia que corre, motor por motor
+# (`/search?q=…&format=json&language=en&safesearch=2&engines=<nombre>`). No es una lista copiada.
+#
+# SEMÁNTICA DEL MERGE (verificada en searx/settings_loader.py::update_settings de la imagen): con
+# `use_default_settings: true`, cada entrada de aquí se FUSIONA POR `name` con el motor por defecto del
+# mismo nombre. Un nombre que NO existe no da error: SearXNG lo AGREGA como motor nuevo y revienta al
+# inicializarlo. Los nombres de abajo salieron de `/config` de la instancia.
+#
+# `disabled: true` no borra el motor: lo saca del set por defecto (deja de consultarse y de aparecer en
+# `unresponsive_engines`), pero se puede seguir pidiendo explícito con `&engines=<nombre>` para
+# re-medirlo sin tocar esta config.
+
+engines:
+
+  # ── general: los que SÍ contestaron, con resultado real ────────────────────────────────────────────
+  # Cifras = resultados devueltos en la medición del 2026-09-07.
+
+  - name: bing                    # 10 ("python") · 7 ("openhands ai agent"). En inglés y el más certero.
+    disabled: false
+    timeout: 6.0
+
+  - name: yep                     # 20 · 20. Índice propio, resultados en inglés y pertinentes.
+    disabled: false
+    timeout: 6.0
+
+  - name: gmx                     # 10 · 10. Portal respaldado por Bing; con `language=en` responde en inglés.
+    disabled: false
+    timeout: 6.0
+
+  - name: yandex                  # 10 · 15. Responde bien y en inglés. Si no lo quieres, `disabled: true`.
+    disabled: false
+    timeout: 6.0
+
+  - name: fynd                    # 10 · 7. Volumen menor pero relevante.
+    disabled: false
+    timeout: 6.0
+
+  - name: mwmbl                   # 116 ("python") en una pasada y timeout en otra → INESTABLE, por eso 6 s
+    disabled: false               # en vez de los 3 de fábrica. Aporta mucho cuando responde.
+    timeout: 6.0
+
+  - name: boardreader             # 9 · 6. Foros (HuggingFace, Discourse…): justo donde se discuten
+    disabled: false               # los problemas que no están en la doc.
+    timeout: 6.0
+
+  - name: searchmysite            # 5 · 5. Índice de web independiente; poco volumen, cero ruido.
+    disabled: false
+    timeout: 6.0
+
+  # ── verticales de código, TAMBIÉN en `general` ─────────────────────────────────────────────────────
+  # Ya venían habilitados, pero solo en las categorías `it`/`repos`/`q&a`, y Odysseus NUNCA las consulta:
+  # `searxng_search_api()` pide `categories=general` (o `news`). Agregarles `general` es lo que los pone
+  # de verdad al alcance del buscador de Odysseus. Ojo: `categories` se REEMPLAZA entera en el merge
+  # (no es un mapa), por eso van repetidas las categorías originales.
+  # Para revertirlo, borra estas dos entradas: vuelven a sus categorías de fábrica.
+
+  - name: github                  # 30 ("python asyncio")
+    categories: [it, repos, general]
+    timeout: 6.0
+
+  - name: stackoverflow           # 10 ("python asyncio")
+    categories: [it, "q&a", general]
+    timeout: 6.0
+
+  # ── general: los BLOQUEADOS, apagados para que no metan ruido ──────────────────────────────────────
+  # Los cuatro devolvían 0 y los tres primeros ensuciaban `unresponsive_engines` en CADA consulta.
+  # Con este set por defecto, 8 de 8 consultas seguidas a `?q=openhands&format=json` dieron CERO
+  # resultados (medido). Tras un CAPTCHA, SearXNG suspende el motor 1 h — y 15 días si el CAPTCHA es de
+  # Cloudflare (`search.suspended_times`) —, así que no se recuperan solos en una sesión de trabajo.
+
+  - name: duckduckgo              # "CAPTCHA" en todos los intentos.
+    disabled: true
+
+  - name: startpage               # "Suspended: CAPTCHA" en todos los intentos.
+    disabled: true
+
+  - name: brave                   # "too many requests" en 9 de 9 intentos. Su suspensión por rate-limit
+    disabled: true                # dura solo 180 s, así que de vez en cuando alcanza a colar una
+                                  # respuesta buena (por eso el fallo PARECÍA intermitente), pero no es
+                                  # fiable. SearXNG no tiene límite de tasa SALIENTE por motor, o sea que
+                                  # no hay forma de "portarse bien" con Brave desde la config: o se le
+                                  # paga la API, o se deja fuera. Volverlo a habilitar es esta línea.
+
+  - name: google                  # 0 resultados en las 3 consultas probadas, SIN error (por eso ni
+    disabled: true                # siquiera salía en `unresponsive_engines`). Un curl crudo a google.com
+                                  # desde este host sí da 200: lo que falla es lo que llega al parser.
+
+  # NOTA sobre `mojeek`: viene apagado de fábrica, así que no hace falta apagarlo aquí — pero conviene
+  # dejar dicho por qué NO se habilitó, porque era el candidato obvio: un curl directo a
+  # https://www.mojeek.com/search desde este host devuelve `<title>Captcha</title>`. Por eso daba 0
+  # callado. Mismo caso `presearch` (timeout) y `qwant` (access denied).
+  # `quark` y `360search` sí responden (9 y 7 resultados), pero en chino — justo la contaminación de
+  # idioma que el comentario de services/search/providers.py dice que se quiere evitar.
+
+  # ── news: los bloqueados de la categoría de noticias ───────────────────────────────────────────────
+  # Odysseus cambia a `categories=news` cuando detecta una consulta de actualidad. Ahí SÍ quedan cuatro
+  # motores sanos medidos ("artificial intelligence"): bing news (10), duckduckgo news (26),
+  # reuters (20) y wikinews (5) — el `duckduckgo news` funciona aunque el `duckduckgo` web esté
+  # bloqueado: son endpoints distintos. Estos tres son los que sobraban:
+
+  - name: google news             # "CAPTCHA".
+    disabled: true
+
+  - name: startpage news          # "CAPTCHA".
+    disabled: true
+
+  - name: brave.news              # "Suspended: too many requests".
+    disabled: true

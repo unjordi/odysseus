@@ -125,11 +125,22 @@ def _safesearch_for(provider: str) -> Optional[str]:
 
 _NEWS_HINTS = ("news", "nyheter", "headlines", "breaking", "latest", "today", "idag")
 
-# Default general engines (google/duckduckgo/brave/startpage/wikipedia) are
-# routinely rate-limited / CAPTCHA-blocked on this instance and return nothing.
-# Pin engines that actually respond so non-news queries get results without any
-# third-party API fallback. Override via SEARXNG_GENERAL_ENGINES.
-_GENERAL_ENGINES = os.environ.get("SEARXNG_GENERAL_ENGINES", "bing,mojeek,presearch")
+# Which engines answer a `general` query is now decided in ONE place: SearXNG's own
+# config (config/searxng/settings.yml), where every engine was measured against this
+# host before being enabled. So there is no pin here by default.
+#
+# There used to be one -- "bing,mojeek,presearch" -- added because the stock general
+# set (google/duckduckgo/brave/startpage) is CAPTCHA-blocked from here and returns
+# nothing. It aged badly and silently: measured 2026-09-07, mojeek serves this host a
+# CAPTCHA page (0 results, and *no* error, so it never even showed up in
+# `unresponsive_engines`) and presearch times out. The pin had quietly narrowed every
+# general search down to bing alone -- and, worse, it OVERRODE SearXNG's engine list,
+# so fixing the config would not have reached this path.
+#
+# Keeping the list in two places is what let them drift apart. Set
+# SEARXNG_GENERAL_ENGINES to a comma-separated list only to pin a deployment against
+# a SearXNG whose config you do not control.
+_GENERAL_ENGINES = os.environ.get("SEARXNG_GENERAL_ENGINES", "")
 
 
 def searxng_search_api(query: str, count: Optional[int] = None, categories: str = "general",
@@ -167,8 +178,8 @@ def searxng_search_api(query: str, count: Optional[int] = None, categories: str 
             params["time_range"] = "week" if time_filter in ("day", "week") else time_filter
     else:
         params["categories"] = categories
-        # Route general queries to engines that aren't blocked (default general
-        # set returns 0 on this instance — see _GENERAL_ENGINES).
+        # No engine pin unless one was configured explicitly: which engines answer
+        # `general` is SearXNG's config to decide -- see _GENERAL_ENGINES above.
         if categories == "general" and _GENERAL_ENGINES:
             params["engines"] = _GENERAL_ENGINES
     try:
