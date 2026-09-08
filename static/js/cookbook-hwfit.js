@@ -542,6 +542,121 @@ function _hwfitShowError(list, host, detail) {
   if (rb) rb.addEventListener('click', () => { _resetGpuToggleState(); _hwfitFetch(true); });
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Catalog provenance strip
+//
+// The model list is not live data: it is a catalog frozen in the repo, plus
+// optional feeds on top. Before this strip existed nothing on screen said so,
+// so a catalog months old looked exactly like a fresh one. It states the seal
+// (source + date + count) and offers the button that regenerates it through
+// whichllm, which ranks live HuggingFace models against public benchmarks.
+// ─────────────────────────────────────────────────────────────────────────
+
+function _catalogAgeLabel(epochSeconds) {
+  if (!epochSeconds) return 'never';
+  const ms = Number(epochSeconds) * 1000;
+  if (!Number.isFinite(ms) || ms <= 0) return 'never';
+  const d = new Date(ms);
+  const days = Math.floor((Date.now() - ms) / 86400000);
+  const stamp = d.toISOString().slice(0, 10);
+  if (days <= 0) return `${stamp} (today)`;
+  if (days === 1) return `${stamp} (1 day ago)`;
+  return `${stamp} (${days} days ago)`;
+}
+
+function _renderCatalogStatus(data) {
+  const summary = document.getElementById('hwfit-catalog-summary');
+  const btn = document.getElementById('hwfit-catalog-refresh');
+  if (!summary) return;
+  const sources = Array.isArray(data?.sources) ? data.sources : [];
+  const bundled = sources.find(s => s.key === 'bundled') || {};
+  const wl = sources.find(s => s.key === 'whichllm') || {};
+
+  const parts = [];
+  const total = data?.active_total;
+  parts.push(`Catalog: ${total ? `${total} models` : 'unavailable'}`);
+  if (bundled.count) {
+    parts.push(`bundled ${bundled.count} sealed ${bundled.sealed_at || 'unknown date'}`);
+  }
+  if (wl.catalog && wl.catalog.count) {
+    parts.push(`whichllm ${wl.catalog.count} · ${_catalogAgeLabel(wl.catalog.generated_at)}`
+      + (wl.catalog.whichllm_version ? ` · v${wl.catalog.whichllm_version}` : ''));
+  } else {
+    parts.push('whichllm: never run');
+  }
+  summary.textContent = parts.join(' · ');
+  summary.title = wl.catalog
+    ? `whichllm command: ${(wl.catalog.command || []).join(' ')}`
+    : 'The bundled catalog is the offline fallback; whichllm is the optional live source.';
+
+  if (btn) {
+    if (wl.available === false) {
+      btn.disabled = true;
+      btn.title = wl.install_hint || wl.error
+        || 'whichllm is not installed — `pip install whichllm`, or make uvx available.';
+      btn.textContent = '⟳ whichllm not installed';
+    } else {
+      btn.disabled = false;
+      btn.textContent = '⟳ Update via whichllm';
+      btn.title = `Re-rank live from HuggingFace + public benchmarks via ${wl.runner || 'whichllm'}`
+        + (wl.version ? ` (v${wl.version})` : '')
+        + '. The bundled catalog stays as the offline fallback.';
+    }
+  }
+}
+
+export async function _hwfitRefreshCatalogStatus() {
+  try {
+    const res = await fetch('/api/hwfit/catalog-status');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    _renderCatalogStatus(await res.json());
+  } catch (e) {
+    const summary = document.getElementById('hwfit-catalog-summary');
+    // Status is informational: if it can't load, say so quietly instead of
+    // pretending the catalog is fresh.
+    if (summary) summary.textContent = 'Catalog: provenance unavailable';
+  }
+}
+
+export function _bindHwfitCatalogBar() {
+  const btn = document.getElementById('hwfit-catalog-refresh');
+  if (btn && !btn.dataset.bound) {
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', async () => {
+      const msg = document.getElementById('hwfit-catalog-msg');
+      const label = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = '⟳ Updating…';
+      if (msg) msg.textContent = 'querying HuggingFace + benchmark leaderboards…';
+      try {
+        const res = await fetch('/api/hwfit/catalog/refresh?source=whichllm', { method: 'POST' });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(body?.detail || body?.error || `HTTP ${res.status}`);
+        }
+        const meta = body?.catalog || {};
+        if (msg) {
+          msg.textContent = `updated: ${meta.count || 0} models sealed ${meta.generated_at_iso || ''}`;
+          msg.style.color = '';
+        }
+        await _hwfitRefreshCatalogStatus();
+        // The merged catalog changed server-side — re-rank so the list on
+        // screen matches the seal we just printed.
+        _hwfitFetch(false);
+      } catch (e) {
+        if (msg) {
+          msg.textContent = String(e?.message || e);
+          msg.style.color = 'var(--red)';
+        }
+      } finally {
+        btn.disabled = false;
+        btn.textContent = label;
+      }
+    });
+  }
+  _hwfitRefreshCatalogStatus();
+}
+
 // Client-side "Engine" filter (llama.cpp / vLLM / SGLang / Ollama / Diffusers). Empty =
 // show all. Uses the same _detectBackend() the serve commands use, so what you
 // filter to is exactly what would be launched. Pure view filter — no refetch

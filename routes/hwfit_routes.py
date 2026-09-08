@@ -200,6 +200,85 @@ def setup_hwfit_routes():
         from services.hwfit.live import collect_live
         return collect_live()
 
+    @router.get("/catalog-status")
+    def get_catalog_status():
+        """Where the model list on screen came from, and HOW OLD it is.
+
+        The Cookbook used to rank against a catalog frozen in the repo with
+        nothing on screen saying so — a model published after the freeze just
+        did not exist, silently. This returns one sealed row per source
+        (bundled freeze, HF collection feeds, whichllm regeneration) so the UI
+        can state the date instead of implying freshness it does not have."""
+        from services.hwfit.models import get_models as load_catalog, bundled_catalog_meta
+
+        sources = [bundled_catalog_meta()]
+        try:
+            from services.hwfit.hf_discovery import (
+                hf_collection_cache_meta,
+                mlx_community_cache_meta,
+            )
+            sources.append(hf_collection_cache_meta())
+            sources.append(mlx_community_cache_meta())
+        except Exception as e:
+            sources.append({"key": "hf_collections", "error": str(e)})
+
+        whichllm = {"key": "whichllm", "label": "whichllm (live ranking)"}
+        try:
+            from services.hwfit import whichllm_catalog
+
+            whichllm.update(whichllm_catalog.probe())
+            cached = whichllm_catalog.whichllm_catalog_meta()
+            whichllm["catalog"] = cached
+            whichllm["count"] = (cached or {}).get("count", 0)
+            whichllm["generated_at"] = (cached or {}).get("generated_at")
+            whichllm["docs_url"] = whichllm_catalog.WHICHLLM_REPO_URL
+        except Exception as e:
+            whichllm["available"] = False
+            whichllm["error"] = str(e)
+        sources.append(whichllm)
+
+        return {"sources": sources, "active_total": len(load_catalog())}
+
+    @router.post("/catalog/refresh")
+    def post_catalog_refresh(source: str = "whichllm", top: int = 0, gpu: str = "", profile: str = ""):
+        """Regenerate the model catalog on demand.
+
+        `source=whichllm` re-ranks live from HuggingFace + public leaderboards
+        via the whichllm CLI and seals the result with its date/version;
+        `source=hf` refreshes the HuggingFace collection feeds. Either way the
+        bundled catalog stays untouched on disk, so the offline path is intact
+        if the refresh fails or is never run."""
+        from services.hwfit.models import refresh_dynamic_catalogs, reset_model_cache
+
+        key = (source or "whichllm").strip().lower()
+        if key in ("hf", "collections", "hf_collections"):
+            try:
+                return {"source": "hf_collections", "refreshed": refresh_dynamic_catalogs(force=True)}
+            except Exception as e:
+                raise HTTPException(502, f"HuggingFace collection refresh failed: {e}")
+        if key != "whichllm":
+            raise HTTPException(400, f"unknown catalog source: {source}")
+
+        from services.hwfit import whichllm_catalog
+
+        kwargs = {}
+        if top:
+            kwargs["top"] = max(10, min(int(top), 2000))
+        if gpu:
+            kwargs["gpu"] = gpu
+        if profile:
+            kwargs["profile"] = profile
+        try:
+            meta = whichllm_catalog.refresh_whichllm_catalog(**kwargs)
+        except whichllm_catalog.WhichllmError as e:
+            # 503, not 500: the bundled catalog is still serving fine, the
+            # optional live source just isn't available right now.
+            raise HTTPException(503, str(e))
+        except Exception as e:
+            raise HTTPException(500, f"whichllm refresh failed: {e}")
+        reset_model_cache()
+        return {"source": "whichllm", "catalog": meta}
+
     @router.get("/models")
     def get_models(use_case: str = "", sort: str = "newest", limit: int = 50, search: str = "", host: str = "", quant: str = "", ctx: str = "", gpu_count: str = "", gpu_group: str = "", ssh_port: str = "", platform: str = "", fresh: bool = False, refresh_catalog: bool = False, manual_mode: str = "", manual_gpu_count: str = "", manual_vram_gb: str = "", manual_ram_gb: str = "", manual_backend: str = "", ignore_detected_gpu: bool = False, ignore_detected_ram: bool = False, fit_only: bool = False):
         """Rank LLM models against detected hardware and return scored results.

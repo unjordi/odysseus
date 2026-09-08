@@ -333,6 +333,45 @@ def load_cached_hf_collection_models():
     return _load_cache(HF_COLLECTION_MODELS_CACHE)
 
 
+def _cache_meta(path, key, label):
+    """When was this feed last fetched, and from where — no model rows.
+
+    Returns ``fetched_at=None`` when the feed has never been fetched on this
+    install; the caller renders that as "never", not as a fake date.
+    """
+    meta = {
+        "key": key,
+        "label": label,
+        "source": None,
+        "fetched_at": None,
+        "count": 0,
+        "ttl_hours": HF_COLLECTION_TTL_SECONDS // 3600,
+        "fresh": False,
+    }
+    try:
+        with path.open(encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return meta
+    if isinstance(data, dict):
+        meta["source"] = data.get("source")
+        meta["fetched_at"] = data.get("fetched_at")
+        rows = data.get("models")
+        meta["count"] = len(rows) if isinstance(rows, list) else (data.get("count") or 0)
+    elif isinstance(data, list):
+        meta["count"] = len(data)
+    meta["fresh"] = _cache_fresh(path)
+    return meta
+
+
+def hf_collection_cache_meta():
+    return _cache_meta(HF_COLLECTION_MODELS_CACHE, "hf_collections", "HuggingFace collections")
+
+
+def mlx_community_cache_meta():
+    return _cache_meta(MLX_COMMUNITY_CACHE, "mlx_community", "mlx-community collections")
+
+
 def _cache_fresh(path):
     try:
         return (time.time() - path.stat().st_mtime) < HF_COLLECTION_TTL_SECONDS

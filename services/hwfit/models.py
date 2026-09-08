@@ -297,6 +297,31 @@ def refresh_dynamic_catalogs(force=False):
     reset_model_cache()
     return refreshed
 
+
+def _apply_whichllm_overlay(by_name, whichllm_rows):
+    """Freshen entries the bundled catalog already has, without overwriting it.
+
+    A model present in both keeps its curated row (use_case, capabilities,
+    context_length — things whichllm does not know). What it gains is the
+    stuff that goes stale: download counts, a missing release date, and the
+    benchmark evidence whichllm resolved for it.
+    """
+    for row in whichllm_rows:
+        if not isinstance(row, dict):
+            continue
+        existing = by_name.get(row.get("name"))
+        if existing is None:
+            continue
+        evidence = row.get("whichllm")
+        if evidence:
+            existing["whichllm"] = evidence
+        downloads = row.get("hf_downloads") or 0
+        if downloads > (existing.get("hf_downloads") or 0):
+            existing["hf_downloads"] = downloads
+        if not existing.get("release_date") and row.get("release_date"):
+            existing["release_date"] = row["release_date"]
+
+
 def get_models():
     global _models_cache
     if _models_cache is None:
@@ -312,8 +337,16 @@ def get_models():
         except Exception:
             dynamic_mlx_models = []
             dynamic_hf_models = []
+        try:
+            from services.hwfit.whichllm_catalog import load_cached_whichllm_models
+            whichllm_models = load_cached_whichllm_models()
+        except Exception:
+            # whichllm is optional. No refresh has ever run (or the cache is
+            # unreadable) -> the bundled catalog alone, exactly as before.
+            whichllm_models = []
         seen = set()
         rows = []
+        by_name = {}
         def _append_models(models):
             for model in models:
                 if not isinstance(model, dict):
@@ -322,7 +355,9 @@ def get_models():
                 if not name or name in seen:
                     continue
                 seen.add(name)
-                rows.append(_normalize_model_entry(model))
+                entry = _normalize_model_entry(model)
+                rows.append(entry)
+                by_name[name] = entry
 
         for model in _load_model_file(data_path):
             if not isinstance(model, dict):
@@ -331,13 +366,55 @@ def get_models():
             if not name or name in seen:
                 continue
             seen.add(name)
-            rows.append(_normalize_model_entry(model))
+            entry = _normalize_model_entry(model)
+            rows.append(entry)
+            by_name[name] = entry
+        # whichllm rows land right after the curated catalog: models it knows
+        # and the freeze does not are genuinely new, and they carry benchmark
+        # evidence the collection feeds below do not have.
+        _append_models(whichllm_models)
         _append_models(dynamic_hf_models)
         _append_models(dynamic_mlx_models)
         _append_models(_load_model_file(static_mlx_path))
+        _apply_whichllm_overlay(by_name, whichllm_models)
         _models_cache = rows
     return _models_cache
 
 
 def model_catalog_path():
     return os.path.join(os.path.dirname(__file__), "data", "hf_models.json")
+
+
+def bundled_catalog_meta():
+    """The seal of the catalog frozen in the repo: when, how many, offline.
+
+    Reads `data/hf_models.meta.json`. If that file is missing (or a stale
+    fork removed it), the date is DERIVED from the newest release_date in the
+    catalog itself rather than reported as unknown — a floor, never a guess
+    dressed up as a fact.
+    """
+    meta_path = os.path.join(os.path.dirname(__file__), "data", "hf_models.meta.json")
+    rows = _load_model_file(model_catalog_path())
+    try:
+        with open(meta_path, encoding="utf-8") as fh:
+            meta = json.load(fh)
+        if isinstance(meta, dict):
+            meta = dict(meta)
+            meta["count"] = len(rows)
+            meta.setdefault("key", "bundled")
+            return meta
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        pass
+    newest = ""
+    for model in rows:
+        if isinstance(model, dict):
+            newest = max(newest, model.get("release_date") or "")
+    return {
+        "key": "bundled",
+        "source": "repo-frozen",
+        "label": "Bundled catalog",
+        "sealed_at": newest,
+        "sealed_at_derived_from": "newest release_date in hf_models.json (meta file absent)",
+        "count": len(rows),
+        "offline": True,
+    }
