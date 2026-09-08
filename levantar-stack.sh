@@ -8,7 +8,6 @@
 #   ./levantar-stack.sh --config       # NO levanta nada: imprime el compose RESUELTO (validación)
 #   ./levantar-stack.sh --sin-axon     # el stack sin el main car (debug de Odysseus a pelo, :7000)
 #   ./levantar-stack.sh --sin-ollama   # deja el Ollama NATIVO del host (no levanta el del stack)
-#   ./levantar-stack.sh --sin-build    # no re-buildea la imagen de Odysseus (up rápido)
 #   ./levantar-stack.sh --sin-publicar # NO publica la imagen: consume el AXON_IMAGE_TAG que ya le den
 #   ./levantar-stack.sh --solo-axon    # recrea SOLO el servicio `axon` sobre un stack ya arriba
 #
@@ -31,13 +30,12 @@ set -euo pipefail
 cd "$(dirname "$0")"   # el project dir del compose ES este directorio (las rutas relativas dependen de él)
 
 AXON_REPO="${AXON_REPO:-$HOME/code/axon}"
-CON_AXON=1; CON_OLLAMA=1; BUILD_ARG="--build"; SOLO_CONFIG=0; PUBLICAR=1; SOLO_AXON=0
+CON_AXON=1; CON_OLLAMA=1; SOLO_CONFIG=0; PUBLICAR=1; SOLO_AXON=0
 for a in "$@"; do
   case "$a" in
     --config)        SOLO_CONFIG=1 ;;
     --sin-axon)      CON_AXON=0 ;;
     --sin-ollama)    CON_OLLAMA=0 ;;
-    --sin-build)     BUILD_ARG="" ;;
     --sin-publicar)  PUBLICAR=0 ;;
     --solo-axon)     SOLO_AXON=1 ;;
     *) echo "✗ opción desconocida: $a" >&2; exit 2 ;;
@@ -195,7 +193,7 @@ if [ "$SOLO_AXON" = 1 ]; then
   docker compose "${FILES[@]}" -p odysseus up -d --no-deps axon
 else
   echo "═══ 2/2 · up del stack (proyecto 'odysseus') ═══"
-  docker compose "${FILES[@]}" -p odysseus up -d ${BUILD_ARG}
+  docker compose "${FILES[@]}" -p odysseus up -d --build
 fi
 
 # En `--solo-axon` todo lo que sigue (espera, tabla de salud, smokes) se acota al servicio que se tocó:
