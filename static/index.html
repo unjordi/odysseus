@@ -1182,19 +1182,20 @@
       </div>
       <div id="pinned-tools-bar"></div>
       <div class="chat-input-bottom" style="visibility:hidden">
-        <!-- Whisper-flow dictation indicator — shown while #voice-input-btn is listening.
-             Vive en la MISMA fila que el micrófono (no en .chat-input-top, donde vivía
-             antes): así se dibuja sobre el botón sin aritmética entre filas, y su
-             posición por defecto —sin JS, o si el micro no se puede medir— cae sobre la
-             barra de herramientas, JAMÁS sobre el texto del mensaje que se transcribe.
-             No puede colgar de .chat-input-left porque ese contenedor es overflow:hidden
-             y recortaría la píldora; .chat-input-bottom no recorta. -->
+        <!-- Dictado: el indicador ES el micrófono. El botón #voice-input-btn toma el flow
+             naranja mientras graba (ver .recording en style.css) y lo ÚNICO que se dibuja
+             encima es este cuadrito de "stop", clavado en su esquina superior derecha.
+             Sin etiqueta, sin texto provisional y sin píldora: la versión anterior se
+             extendía hacia la derecha desde el micro y tapaba los botones de la barra,
+             que es justo lo que se reportó. Por eso aquí solo queda el botón.
+
+             Sigue viviendo en .chat-input-bottom (la MISMA fila que el micrófono) y no en
+             .chat-input-left, que es overflow:hidden y recortaría cualquier cosa que
+             sobresalga del botón. El estado ("Listening…"/"Transcribing…") se mantiene
+             para lectores de pantalla en aria-label, no como texto visible. -->
         <div id="voice-flow-status" class="voice-flow-status" hidden role="status" aria-live="polite">
-          <span class="voice-flow-dot" aria-hidden="true"></span>
-          <span class="voice-flow-label">Listening…</span>
-          <span class="voice-flow-interim"></span>
           <button type="button" class="voice-flow-stop" id="voice-flow-stop-btn" title="Stop dictation" aria-label="Stop dictation">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+            <svg width="8" height="8" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
           </button>
         </div>
         <div class="chat-input-left">

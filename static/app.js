@@ -4427,58 +4427,67 @@ function startOdysseusApp() {
 	    const btn = document.getElementById('voice-input-btn');
 	    if (!btn) return;
 	    const statusEl = document.getElementById('voice-flow-status');
-	    const labelEl = statusEl ? statusEl.querySelector('.voice-flow-label') : null;
-	    const interimEl = statusEl ? statusEl.querySelector('.voice-flow-interim') : null;
 	    const stopBtn = document.getElementById('voice-flow-stop-btn');
 
-	    // The "Listening…" pill is drawn OVER the mic button, never over the message
-	    // text. The pill now lives in .chat-input-bottom — the mic's OWN row — so the
-	    // CSS handles the vertical placement by itself (top:50% centers it on the row)
-	    // and the only thing measured here is the HORIZONTAL offset of the button
-	    // inside that row. That is the point of the move: the previous attempt kept the
-	    // pill in .chat-input-top and derived `bottom` from the distance BETWEEN rows,
-	    // so any measurement it could not take fell back to the pill sitting on the
-	    // textarea — exactly the bug being reported. Now a missing measurement just
-	    // leaves it at left:0 of the toolbar row.
+	    // El indicador de dictado ES el micrófono: #voice-input-btn se pinta con el
+	    // flow naranja mientras graba (CSS .recording) y lo único que se dibuja
+	    // encima es el cuadrito de stop. La píldora con "Listening…" + el texto
+	    // provisional se retiró: crecía hacia la derecha desde el micro y tapaba los
+	    // botones de la barra — el bug reportado. El provisional ya se ve donde
+	    // importa (entra al compositor conforme se habla), así que no se pierde nada.
 	    //
-	    // Recomputed when it's shown, on window resize, and whenever the toolbar itself
-	    // reflows (initToolbarOverflow collapses buttons into the overflow menu as the
-	    // bar narrows, which slides the mic sideways without any window resize).
+	    // Lo único que se mide aquí es DÓNDE está el micrófono dentro de su fila,
+	    // para clavar el cuadrito en su esquina superior derecha. Dos coordenadas y
+	    // no una: a la píldora le bastaba la horizontal porque se centraba en la
+	    // fila con top:50%; una insignia de esquina necesita también la vertical.
 	    const anchorHost = statusEl ? statusEl.parentElement : null;
-	    function anchorStatusToMic() {
+	    function anchorStopToMic() {
 	      if (!statusEl || !anchorHost) return;
 	      const micRect = btn.getBoundingClientRect();
 	      const hostRect = anchorHost.getBoundingClientRect();
 	      if (!micRect.width || !hostRect.width) {
-	        // No usable measurement (mic display:none, row not laid out yet): leave the
-	        // CSS default (left:0 of the toolbar row) instead of writing a bogus offset.
+	        // Sin medida usable (micro en display:none, fila aún sin layout) se
+	        // dejan los defaults del CSS (0,0 = inicio de la fila de herramientas)
+	        // en vez de escribir un offset inventado. Peor caso: el cuadrito sale
+	        // al principio de la barra — fuera del camino, nunca sobre el texto
+	        // que se está dictando.
 	        statusEl.style.removeProperty('--voice-flow-anchor-x');
+	        statusEl.style.removeProperty('--voice-flow-anchor-y');
 	        return;
 	      }
-	      const x = Math.max(0, Math.round(micRect.left - hostRect.left));
+	      const x = Math.max(0, Math.round(micRect.right - hostRect.left));
+	      const y = Math.max(0, Math.round(micRect.top - hostRect.top));
 	      statusEl.style.setProperty('--voice-flow-anchor-x', x + 'px');
+	      statusEl.style.setProperty('--voice-flow-anchor-y', y + 'px');
 	    }
-	    window.addEventListener('resize', anchorStatusToMic);
+	    // Se recalcula al mostrarse, al cambiar el tamaño de ventana y cuando la
+	    // barra se reacomoda: initToolbarOverflow colapsa botones al menú de
+	    // overflow conforme se angosta, lo que desliza el micro de lado SIN que
+	    // haya un resize de ventana.
+	    window.addEventListener('resize', anchorStopToMic);
 	    try {
 	      if (anchorHost && window.ResizeObserver) {
-	        new ResizeObserver(() => requestAnimationFrame(anchorStatusToMic)).observe(anchorHost);
+	        new ResizeObserver(() => requestAnimationFrame(anchorStopToMic)).observe(anchorHost);
 	      }
-	    } catch (_) { /* sin ResizeObserver quedan el resize de ventana y el anclaje al mostrar */ }
+	    } catch (_) { /* sin ResizeObserver quedan el resize y el anclaje al mostrar */ }
 
 	    function setActiveUI(active) {
 	      btn.classList.toggle('recording', active);
 	      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
 	      btn.title = active ? 'Stop dictation' : 'Dictate by voice';
+	      if (!active) btn.setAttribute('aria-label', 'Dictate by voice');
 	      if (statusEl) statusEl.hidden = !active;
-	      if (!active && interimEl) interimEl.textContent = '';
-	      if (active) anchorStatusToMic();
+	      if (active) anchorStopToMic();
 	    }
 
 	    function onState(state, interim) {
-	      if (labelEl) {
-	        labelEl.textContent = state === 'transcribing' ? 'Transcribing…' : 'Listening…';
-	      }
-	      if (interimEl) interimEl.textContent = interim || '';
+	      // El estado ya no se pinta como texto visible. Se sigue anunciando por
+	      // accesibilidad: el contenedor es role="status" aria-live, y el propio
+	      // micrófono lleva el estado en su aria-label — que es lo que un lector de
+	      // pantalla puede leer sin ocupar un solo píxel de la barra.
+	      const leyenda = state === 'transcribing' ? 'Transcribing…' : 'Listening…';
+	      if (statusEl) statusEl.setAttribute('aria-label', leyenda);
+	      btn.setAttribute('aria-label', leyenda + ' Stop dictation');
 	      if (state === 'idle') setActiveUI(false);
 	    }
 

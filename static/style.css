@@ -28,6 +28,16 @@
      Anchor them to real hex so the token layer actually works. */
   --green: #50fa7b;
   --warn: #f0ad4e;
+  /* Naranja del dictado (el micrófono mientras graba). Deriva de --warn, que
+     ES el naranja de esta paleta, para que un tema que repinte su ámbar
+     repinte también el micro sin tocar esta regla — de ahí que sea
+     "responsivo al tema". Se declara como token PROPIO, y no se usa --warn
+     directo, por dos razones: dictar no es una advertencia (si mañana --warn
+     se vuelve amarillo chillón, el micro no tiene por qué seguirlo), y así un
+     tema puede darle un acento distinto redefiniendo solo esta línea.
+     NO se usa --red: ese es el color de error/destructivo del resto de la
+     interfaz, y dictar no es ninguna de las dos. */
+  --voice-flow: var(--warn);
 
   /* Syntax highlighting */
   --hl-bg: #1e2228;
@@ -2579,83 +2589,101 @@ body.bg-pattern-sparkles {
 	    .plan-mode-status-toggle:hover {
 	      background: color-mix(in srgb, var(--accent, var(--red)) 30%, transparent);
 	    }
-	    /* Whisper-flow dictation indicator — píldora dibujada SOBRE el botón del
-	       micrófono (#voice-input-btn), no sobre la caja de mensaje.
-	       Vive en `.chat-input-bottom`, la MISMA fila que el micrófono (ver
-	       index.html). Eso es lo que arregla de raíz el intento anterior, que la
-	       dejaba en `.chat-input-top` y derivaba `bottom` de la distancia ENTRE
-	       filas:
-	         · el centrado vertical (top:50% + translateY) la clava en la fila del
-	           micro sin medir nada, así que el único offset que JS calcula es el
-	           HORIZONTAL;
-	         · si ese offset no se llega a calcular (el JS no corrió, o el micro no
-	           tiene medida), el default `left:0` la deja al inicio de la barra de
-	           herramientas — nunca encima del texto que se está transcribiendo, que
-	           era justo el fallback del diseño anterior. */
-	    .voice-flow-status {
-	      position: absolute;
-	      left: var(--voice-flow-anchor-x, 0px);
-	      top: 50%;
-	      transform: translateY(-50%);
-	      z-index: 245;
-	      display: inline-flex;
-	      align-items: center;
-	      gap: 6px;
-	      max-width: calc(100% - var(--voice-flow-anchor-x, 0px) - 8px);
-	      height: 22px;
-	      padding: 0 6px 0 8px;
-	      border: 1px solid color-mix(in srgb, var(--red) 35%, transparent);
-	      border-radius: 999px;
-	      background: color-mix(in srgb, var(--red) 12%, var(--input-bg, var(--panel)));
-	      color: var(--red);
-	      font-size: 10px;
-	      font-weight: 700;
-	      line-height: 1;
-	    }
-	    .voice-flow-status[hidden] { display: none !important; }
-	    /* The interim text is what used to make the pill span the whole bar.
-	       Anchored to the mic it has less room, so cap it and let it ellipsize
-	       rather than push the pill across the composer. */
-	    .voice-flow-status .voice-flow-interim { max-width: 22ch; }
-	    .voice-flow-dot {
-	      width: 7px;
-	      height: 7px;
-	      border-radius: 50%;
-	      background: var(--red);
-	      flex-shrink: 0;
-	      animation: voice-flow-pulse 1.3s ease-in-out infinite;
-	    }
-	    .voice-flow-label { flex-shrink: 0; white-space: nowrap; }
-	    .voice-flow-interim {
-	      font-weight: 500;
-	      opacity: 0.7;
-	      font-style: italic;
-	      overflow: hidden;
-	      text-overflow: ellipsis;
-	      white-space: nowrap;
-	      min-width: 0;
-	    }
-	    .voice-flow-stop {
-	      display: flex;
-	      align-items: center;
-	      justify-content: center;
-	      width: 14px;
-	      height: 14px;
-	      padding: 0;
-	      border: none;
-	      border-radius: 50%;
-	      color: var(--red);
-	      background: color-mix(in srgb, var(--red) 20%, transparent);
-	      cursor: pointer;
-	      flex-shrink: 0;
-	      margin-left: 2px;
-	    }
-	    .voice-flow-stop:hover { background: color-mix(in srgb, var(--red) 32%, transparent); }
-	    @keyframes voice-flow-pulse {
-	      0%, 100% { opacity: 1; transform: scale(1); }
-	      50% { opacity: 0.4; transform: scale(0.75); }
-	    }
-	    .chat-input-top > .model-picker-wrap {
+	    /* ── Dictado: el MICRÓFONO es el indicador ───────────────────────────────
+       Antes esto era una píldora ("Listening… <texto provisional> ⏹") anclada al
+       micro y extendida hacia la derecha: tapaba los botones de la barra de
+       herramientas mientras dictabas. Se retiró. Lo que queda:
+
+         · el propio #voice-input-btn toma el FLOW naranja mientras graba
+           (halo que respira + el ícono en naranja), así que el estado se lee en
+           el control que lo produce, sin ocupar ni un píxel de más;
+         · un cuadrito de STOP clavado en su esquina superior derecha, que es lo
+           único dibujado encima.
+
+       El naranja sale de --voice-flow, un token propio con valor por tema (ver
+       la sección de Variables, derivado de --warn) en vez de reusar --red: el rojo
+       es el color de "error/destructivo" del resto de la interfaz y dictar no es
+       ninguna de las dos. Un tema que quiera otro acento redefine --voice-flow. */
+    #voice-input-btn.recording {
+      opacity: 1 !important;
+      color: var(--voice-flow);
+      background: color-mix(in srgb, var(--voice-flow) 14%, transparent);
+      animation: voice-flow-breathe 1.8s ease-in-out infinite;
+    }
+    /* El halo va por box-shadow y NO por outline/border: así no cambia la caja
+       del botón y la barra de herramientas no se recorre un píxel al empezar a
+       dictar (el layout shift era parte de lo que se sentía mal). */
+    @keyframes voice-flow-breathe {
+      0%, 100% {
+        box-shadow: 0 0 0 0 color-mix(in srgb, var(--voice-flow) 45%, transparent),
+                    0 0 6px 0 color-mix(in srgb, var(--voice-flow) 30%, transparent);
+      }
+      50% {
+        box-shadow: 0 0 0 4px color-mix(in srgb, var(--voice-flow) 0%, transparent),
+                    0 0 12px 2px color-mix(in srgb, var(--voice-flow) 45%, transparent);
+      }
+    }
+    /* Quien pidió menos movimiento no recibe ninguno: el color se queda, el
+       latido se va. */
+    @media (prefers-reduced-motion: reduce) {
+      #voice-input-btn.recording { animation: none; }
+      #voice-input-btn.recording {
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--voice-flow) 35%, transparent);
+      }
+    }
+
+    /* El contenedor ya no dibuja NADA (ni fondo, ni borde, ni texto): es solo el
+       marco que coloca el cuadrito de stop sobre la esquina del micrófono. Las
+       dos variables las mide el JS (initVoiceFlowButton) contra el botón real;
+       si no se pueden medir, los defaults dejan el cuadrito al inicio de la fila
+       —fuera del camino— en vez de encima del texto que se está dictando. */
+    .voice-flow-status {
+      position: absolute;
+      left: var(--voice-flow-anchor-x, 0px);
+      top: var(--voice-flow-anchor-y, 0px);
+      z-index: 245;
+      display: block;
+      width: 0;
+      height: 0;
+      pointer-events: none;
+    }
+    .voice-flow-status[hidden] { display: none !important; }
+
+    /* El cuadrito de STOP. Cuadrado (radio 3px) a propósito: contrasta con el
+       micrófono redondeado que tiene debajo y se lee como "detener", no como
+       otro botón más de la barra. Va en la esquina SUPERIOR DERECHA, mordiendo
+       el borde del micro; el translate lo saca media caja para que se vea como
+       insignia y no como algo metido dentro. */
+    .voice-flow-stop {
+      position: absolute;
+      left: 0;
+      top: 0;
+      transform: translate(-45%, -45%);
+      pointer-events: auto;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 14px;
+      height: 14px;
+      padding: 0;
+      border: 1px solid color-mix(in srgb, var(--voice-flow) 55%, transparent);
+      border-radius: 3px;
+      color: #fff;
+      background: var(--voice-flow);
+      cursor: pointer;
+      /* Anillo del color del compositor: despega el cuadrito del micro que tiene
+         debajo sin necesidad de una sombra que se vea sucia en tema claro. */
+      box-shadow: 0 0 0 2px var(--input-bg, var(--panel));
+      transition: transform 0.12s ease, filter 0.12s ease;
+    }
+    .voice-flow-stop:hover { filter: brightness(1.15); transform: translate(-45%, -45%) scale(1.12); }
+    .voice-flow-stop:active { transform: translate(-45%, -45%) scale(0.94); }
+    .voice-flow-stop:focus-visible {
+      outline: 2px solid var(--voice-flow);
+      outline-offset: 2px;
+    }
+
+    .chat-input-top > .model-picker-wrap {
 	      position: absolute;
 	      top: 0;
 	      right: 0;
@@ -2717,9 +2745,10 @@ body.bg-pattern-sparkles {
       justify-content: space-between;
       align-items: center;
       margin-top: 4px;
-      /* Bloque contenedor de `.voice-flow-status` (la píldora de dictado, que se
-         dibuja sobre el micrófono de esta misma fila). NO lleva overflow: la
-         píldora es más ancha que el botón y no debe recortarse. */
+      /* Bloque contenedor de `.voice-flow-status` (el cuadrito de stop del
+         dictado, clavado en la esquina del micrófono de esta misma fila). NO
+         lleva overflow: el cuadrito sobresale del botón a propósito y
+         recortarlo lo partiría a la mitad. */
       position: relative;
     }
     /* Progressive shrinkage: as the chat input bar gets narrow, sacrifice
