@@ -5,6 +5,7 @@ import io
 import logging
 import os
 import re
+import unicodedata
 import httpx
 import tempfile
 from pathlib import Path
@@ -135,6 +136,45 @@ def _normalize(text: str) -> str:
     return " ".join(_WORD_RE.findall(text.lower()))
 
 
+def _fold(text: str) -> str:
+    """Como `_normalize` pero SIN acentos, para comparar contra listas escritas en ASCII.
+
+    `_normalize` conserva la tilde a propósito (el resto del filtro compara frases entre sí, donde la tilde
+    es señal legítima). Aquí sí molesta: una lista de cierres tendría que escribirse dos veces, con y sin
+    acento, y cualquiera que la extienda olvidaría una de las dos.
+    """
+    normalizado = unicodedata.normalize("NFD", _normalize(text))
+    return "".join(c for c in normalizado if unicodedata.category(c) != "Mn")
+
+
+# Cierres de audio que Whisper añade SOLO por haber aprendido de subtítulos: el clip termina, el decoder
+# sigue un token más y estampa la despedida del corpus. Se observó en vivo el 2026-09-08 con el trabalenguas
+# de QA, que salió completo y correcto y luego traía un "¡Gracias!" pegado que nadie dijo.
+#
+# Van por LISTA y no por las dos firmas del filtro de abajo porque no tienen ninguna: aparecen UNA vez (no
+# son un loop) y son demasiado cortas para el test de solape con el prompt (que exige ≥4 palabras).
+#
+# Se comparan con los acentos PLEGADOS (ver `_fold`): `_normalize` pasa a minúsculas pero conserva la tilde,
+# así que "suscríbete" nunca habría casado con una lista escrita sin ella — el primer intento de esto se
+# comía el "¡Gracias!" y dejaba pasar el "¡Suscríbete al canal!" justo por eso.
+_CLOSING_HALLUCINATIONS = frozenset({
+    "gracias",
+    "muchas gracias",
+    "gracias por ver el video",
+    "gracias por ver",
+    "gracias por su atencion",
+    "suscribete al canal",
+    "suscribete",
+    "no olvides suscribirte",
+    "activa la campanita",
+    "hasta la proxima",
+    "nos vemos en el proximo video",
+    "adios",
+    "subtitulos realizados por la comunidad de amara org",
+    "subtitulado por la comunidad de amara org",
+})
+
+
 def filter_degenerate_text(text: str, initial_prompt: str = "") -> str:
     """Drop Whisper's silence hallucinations before they reach the composer.
 
@@ -187,6 +227,19 @@ def filter_degenerate_text(text: str, initial_prompt: str = "") -> str:
                 continue
 
         kept.append(sentence)
+
+    # Cierre de subtítulo pegado al final. Se aplica con dos candados a propósito:
+    #   · solo la ÚLTIMA frase — un "gracias" en medio de un dictado es habla real;
+    #   · solo si queda algo MÁS — así un clip cuyo único contenido es "Gracias" (alguien que de verdad
+    #     quiso dictar eso) se conserva entero. El precio, explícito: si terminas un dictado real diciendo
+    #     "gracias" y nada más después, se pierde esa palabra. Se acepta porque el artefacto aparece en
+    #     CADA clip y la despedida deliberada es rara; si estorba, esta lista es el único sitio que tocar.
+    # NO se suma a `dropped`: ese contador alimenta la regla de "si el clip era casi todo basura, lo que
+    # queda también lo es", pensada para los LOOPS del decoder. Una frase real más una despedida de
+    # subtítulo no es un clip basura — sumarlo ahí hacía que "Revisa el commit. ¡Gracias!" devolviera
+    # cadena VACÍA y se perdiera el dictado entero, que es peor que el artefacto que se quería quitar.
+    while len(kept) >= 2 and _fold(kept[-1]) in _CLOSING_HALLUCINATIONS:
+        kept.pop()
 
     if not kept:
         return ""
