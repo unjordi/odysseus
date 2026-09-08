@@ -248,13 +248,47 @@ fi
 # searxng: BÚSQUEDA JSON REAL. Su healthcheck comprueba que arrancó y parseó settings.yml (su modo de
 # fallo documentado), pero no que devuelve JSON — y JSON es la única forma en que Odysseus lo consume.
 # No puede ir en el healthcheck: cada consulta sale a los motores upstream de verdad.
+#
+# QUÉ SE EXIGE, Y POR QUÉ NO BASTA CON MENOS: al menos UN resultado. La versión anterior comprobaba
+# `'results' in d` — o sea que la CLAVE existiera — y esa clave existe SIEMPRE, también cuando la lista
+# viene vacía. Por eso imprimía "✅ devuelve resultados en JSON" mientras la búsqueda web de Odysseus
+# llevaba quién sabe cuánto devolviendo cero: los motores por defecto (google/duckduckgo/brave/
+# startpage) estaban todos bloqueados con CAPTCHA. Un verde que miente es peor que un rojo, porque
+# vuelve el bug invisible. Ahora `n == 0` es fallo de verdad y cuenta para el código de salida.
+#
+# Y SE NOMBRAN LOS MOTORES MUDOS: `unresponsive_engines` viene en la MISMA respuesta y trae el
+# diagnóstico ya masticado ("CAPTCHA", "Suspended: too many requests", "timeout"). Nadie lo miraba.
+# Se imprime siempre que haya alguno, aunque la búsqueda haya salido bien: es el aviso temprano de que
+# un motor se cayó, mucho antes de que se caigan todos y la búsqueda se apague.
 if docker compose "${FILES[@]}" -p odysseus ps --status running --services 2>/dev/null | grep -qx searxng; then
-  if docker compose "${FILES[@]}" -p odysseus exec -T searxng python -c \
-       "import urllib.request,json,sys; d=json.load(urllib.request.urlopen('http://localhost:8080/search?q=odysseus&format=json',timeout=25)); sys.exit(0 if 'results' in d else 1)" >/dev/null 2>&1; then
-    echo "✅ searxng  · devuelve resultados en JSON (que es como Odysseus lo consume)"
+  # El código de salida se captura del PROBE, no del final de una tubería. Y la asignación va en una
+  # lista `&& … || …` porque este script corre con `set -e`: un `x="$(cmd)"` pelón que falle abortaría
+  # el script entero en vez de dejarnos reportar el fallo.
+  searx_out="$(docker compose "${FILES[@]}" -p odysseus exec -T searxng python -c \
+       "import urllib.request,json,sys; d=json.load(urllib.request.urlopen('http://localhost:8080/search?q=odysseus&format=json',timeout=25)); print(len(d.get('results') or [])); print(','.join(sorted(u[0] for u in (d.get('unresponsive_engines') or []))))" 2>/dev/null)" \
+    && searx_rc=0 || searx_rc=$?
+  searx_n="$(printf '%s\n' "$searx_out" | sed -n '1p')"
+  searx_mudos="$(printf '%s\n' "$searx_out" | sed -n '2p')"
+  # `-gt` sobre algo que no sea un número entero revienta: si el probe devolvió basura, se trata como 0.
+  case "$searx_n" in (*[!0-9]*|'') searx_n=0 ;; esac
+  if [ "$searx_rc" -ne 0 ]; then
+    echo "❌ searxng  · sano para el healthcheck pero la búsqueda JSON ni siquiera respondió. Puede ser"
+    echo "             red, o el formato 'json' deshabilitado → config/searxng/settings.yml"
+    malos=$((malos+1))
+  elif [ "$searx_n" -gt 0 ]; then
+    echo "✅ searxng  · devuelve $searx_n resultados REALES en JSON (que es como Odysseus lo consume)"
+    if [ -n "$searx_mudos" ]; then
+      echo "             ⚠  motores que no respondieron: $searx_mudos"
+    fi
   else
-    echo "⚠  searxng  · sano para el healthcheck pero la búsqueda JSON no respondió. Puede ser red o"
-    echo "             el formato 'json' deshabilitado en settings.yml → config/searxng/settings.yml"
+    echo "❌ searxng  · responde 200 pero con CERO resultados: la búsqueda web está muerta aunque el"
+    echo "             contenedor esté sano. Mira qué motores se cayeron y ajusta la lista en"
+    echo "             config/searxng/settings.yml (subiendo la marca de versión, o el cambio no llega"
+    echo "             al volumen)."
+    if [ -n "$searx_mudos" ]; then
+      echo "             motores que no respondieron: $searx_mudos"
+    fi
+    malos=$((malos+1))
   fi
 fi
 
