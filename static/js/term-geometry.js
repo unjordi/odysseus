@@ -24,6 +24,12 @@
  *  - `scrollbarWidth` = ancho REAL que la scrollbar del `.xterm-viewport` le quita al área de texto
  *    (`offsetWidth - clientWidth` del viewport). Con `scrollbar-gutter: stable` es constante, aparezca o
  *    no la barra → la rejilla no oscila entre "con barra" y "sin barra".
+ *  - `minRightGap` (opcional, default 0) = respiro MÍNIMO que debe quedar a la derecha del texto.
+ *    El carril de la scrollbar YA es ese respiro donde existe, así que se toma el MAYOR de los dos, no
+ *    la suma: sumarlos es justo el bug que costaba una columna (el contenedor traía además su propio
+ *    `padding-right`, y padding + carril ≈ 16 px ≈ 2 celdas de margen muerto contra 8 px a la izquierda).
+ *    Existe para las plataformas de scrollbars OVERLAY (macOS), donde el carril mide 0 y sin esto el
+ *    texto quedaría pegado al borde.
  *  - `cellWidth`/`cellHeight` = `_renderService.dimensions.css.cell` de xterm (métrica de UNA celda con la
  *    fuente que de verdad está rendeando).
  *
@@ -37,11 +43,13 @@ export function computeGrid(m) {
   const {
     boxWidth, boxHeight,
     padLeft = 0, padRight = 0, padTop = 0, padBottom = 0,
-    cellWidth, cellHeight, scrollbarWidth = 0,
+    cellWidth, cellHeight, scrollbarWidth = 0, minRightGap = 0,
   } = m;
   if (!isFinite(cellWidth) || !isFinite(cellHeight) || cellWidth <= 0 || cellHeight <= 0) return null;
   if (!isFinite(boxWidth) || !isFinite(boxHeight)) return null;
-  const availWidth = boxWidth - padLeft - padRight - Math.max(0, scrollbarWidth);
+  // El carril de la scrollbar y el respiro mínimo ocupan el MISMO espacio: se reserva el mayor, no ambos.
+  const rightGap = Math.max(0, scrollbarWidth, isFinite(minRightGap) ? minRightGap : 0);
+  const availWidth = boxWidth - padLeft - padRight - rightGap;
   const availHeight = boxHeight - padTop - padBottom;
   if (availWidth <= 0 || availHeight <= 0) return null;
   return {
