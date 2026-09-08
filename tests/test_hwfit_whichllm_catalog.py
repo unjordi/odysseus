@@ -203,3 +203,57 @@ def test_bundled_catalog_is_sealed_with_a_date_and_a_count():
     assert meta["count"] > 0
     assert meta["sealed_at"], "the bundled catalog must state when it was frozen"
     assert meta["sealed_at_derived_from"], "and where that date comes from"
+
+
+# ── El caché de whichllm tiene que caer en terreno ESCRIBIBLE (QA de unjordi, 2026-09-08) ─────────
+# Síntoma en vivo, con el botón de "actualizar catálogo" del panel de hwfit:
+#     whichllm exited 1: Error fetching models: [Errno 13] Permission denied: '/app/.cache/whichllm'
+# Causa: whichllm escribe SU propio caché bajo XDG_CACHE_HOME (o ~/.cache). En el contenedor eso es
+# `/app/.cache`, que **Docker crea como root:root** al montar el bind de `/app/.cache/huggingface`;
+# la app corre como uid 1000 y no puede crear nada dentro.
+
+
+def test_el_entorno_apunta_el_cache_de_whichllm_a_DATA_DIR(tmp_path, monkeypatch):
+    from services.hwfit import whichllm_catalog as wc
+
+    monkeypatch.setattr(wc, "HW_FIT_CACHE_DIR", tmp_path / "hwfit")
+    # Un HOME/XDG heredados que NO son escribibles: exactamente lo que pasa en el contenedor.
+    monkeypatch.setenv("XDG_CACHE_HOME", "/no/escribible")
+    monkeypatch.setenv("HOME", "/no/escribible")
+
+    env = wc._clean_env()
+    destino = tmp_path / "hwfit" / "whichllm-cache"
+    assert env["XDG_CACHE_HOME"] == str(destino)
+    # HOME también, porque no toda herramienta respeta XDG_CACHE_HOME y el fallback `~/.cache`
+    # tiene que caer igualmente en terreno propio.
+    assert env["HOME"] == str(destino)
+    # Y el directorio se CREA: si no existiera, whichllm fallaría igual que antes.
+    assert destino.is_dir()
+
+
+def test_si_DATA_DIR_no_es_escribible_no_se_enmascara_el_error_real(tmp_path, monkeypatch):
+    from services.hwfit import whichllm_catalog as wc
+
+    # Un HW_FIT_CACHE_DIR imposible de crear (cuelga de un archivo, no de un dir).
+    archivo = tmp_path / "soy-un-archivo"
+    archivo.write_text("x")
+    monkeypatch.setattr(wc, "HW_FIT_CACHE_DIR", archivo / "hwfit")
+    monkeypatch.setenv("XDG_CACHE_HOME", "/el/valor/heredado")
+
+    env = wc._clean_env()
+    # Se deja el entorno como venía: el error que salga será el REAL, no uno enmascarado
+    # por este intento de reubicar el caché.
+    assert env["XDG_CACHE_HOME"] == "/el/valor/heredado"
+
+
+def test_no_se_pierde_el_saneado_de_color_de_rich(tmp_path, monkeypatch):
+    # El contrapeso: reubicar el caché no debe romper para lo que `_clean_env` existía.
+    from services.hwfit import whichllm_catalog as wc
+
+    monkeypatch.setattr(wc, "HW_FIT_CACHE_DIR", tmp_path / "hwfit")
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    env = wc._clean_env()
+    assert env["NO_COLOR"] == "1"
+    assert env["TERM"] == "dumb"
+    assert env["COLUMNS"] == "1000"
+    assert "FORCE_COLOR" not in env

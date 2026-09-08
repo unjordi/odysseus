@@ -136,6 +136,26 @@ def _clean_env():
     env["TERM"] = "dumb"
     env["COLUMNS"] = "1000"
     env.pop("FORCE_COLOR", None)
+
+    # whichllm escribe SU PROPIO caché bajo XDG_CACHE_HOME (o ~/.cache si no está). En el contenedor eso
+    # es `/app/.cache`, un directorio que **Docker crea como root:root** al montar el bind de
+    # `/app/.cache/huggingface`: la app corre como uid 1000 y no puede crear nada dentro. Resultado
+    # observado en vivo (2026-09-08, QA de unjordi):
+    #     whichllm exited 1: Error fetching models: [Errno 13] Permission denied: '/app/.cache/whichllm'
+    #
+    # Se apunta su caché a un subdirectorio de DATA_DIR, que es el volumen que la app SÍ posee y el mismo
+    # sitio donde ya vive el catálogo sellado. Se fija también HOME porque no todas las herramientas
+    # respetan XDG_CACHE_HOME, y con HOME apuntando a un dir escribible el fallback `~/.cache` también cae
+    # en terreno propio. El directorio se crea aquí: si no existe, whichllm falla igual que antes.
+    cache = HW_FIT_CACHE_DIR / "whichllm-cache"
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+        env["XDG_CACHE_HOME"] = str(cache)
+        env["HOME"] = str(cache)
+    except OSError:
+        # Si ni DATA_DIR es escribible, el problema es otro y más grande: se deja el entorno como venía
+        # para que el error que salga sea el REAL y no uno enmascarado por este intento.
+        pass
     return env
 
 
