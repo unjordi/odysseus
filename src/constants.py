@@ -21,6 +21,49 @@ SUPPORTED_UI_LANGUAGES = ("en", "es")
 DEFAULT_UI_LANGUAGE = "en"
 UI_LANGUAGE_COOKIE = "odysseus_lang"
 
+# ── Local speech-to-text defaults ──
+#
+# These live HERE, in the leaf module, because three places need the same value
+# and they drifted apart the moment they each kept their own copy:
+# ``DEFAULT_SETTINGS`` (src/settings.py), the STT service's module constants,
+# and the reset that runs when a voice endpoint is deleted (routes/model_routes).
+# Whoever wins is decided by ``load_settings()``, which merges
+# ``{**DEFAULT_SETTINGS, **saved}`` — so the copy in ``DEFAULT_SETTINGS`` is the
+# one the decoder actually sees, and a "fix" applied to either of the other two
+# is dead code. One definition, imported by all three, makes that impossible.
+#
+# large-v3-turbo, not large-v3: 4 decoder layers instead of 32, so it decodes
+# several times faster with a quality loss that only shows on long audio and
+# low-resource languages — dictation is neither. `base` is where most of the
+# mangled tech jargon came from; if turbo is ever too slow on a given box the
+# step down is `medium`, never back to `base`.
+DEFAULT_STT_MODEL = "large-v3-turbo"
+# NEVER "" (autodetection): on ~3s clips Whisper picks the language about as
+# often as a coin flip and transcribes Spanish as phonetic English.
+DEFAULT_STT_LANGUAGE = "es"
+# A BARE TERM LIST, never a sentence — this is the whole fix for the prompt
+# echo. faster-whisper feeds ``initial_prompt`` to the decoder as a text
+# *prefix*, not as an instruction, so with nothing to transcribe the model
+# simply continues it. Measured on the running box (large-v3, near-silent clip,
+# 2026-09-07):
+#
+#   prose prompt ("Transcripción de dictado técnico en español de México.
+#   Términos frecuentes: …")  ->  "Términos frecuentes en español de México.
+#                                  Términos frecuentes en español de México."
+#   this bare list             ->  no echo
+#   no prompt at all           ->  no echo
+#
+# That echo is what leaked into a real dictation as "El piso está enladrillado.
+# Términos frecuentes en ladrillera." — the prefix continued and fused with the
+# audio. A comma-separated glossary still biases the vocabulary (which is the
+# only reason to send a prompt at all) but offers no sentence to complete, so
+# it keeps the benefit without the failure mode. Keep it a list: any prose
+# added here brings the echo back.
+DEFAULT_STT_INITIAL_PROMPT = (
+    "Whisper, cuantización, MCP, endpoint, VRAM, faster-whisper, ctranslate2, "
+    "push-to-talk, latencia, commit, deploy, backend, axon, Odysseus."
+)
+
 # Data file paths
 # Single source of truth: every persisted file/dir lives under DATA_DIR, which
 # is the ONLY place ODYSSEUS_DATA_DIR is read. Import these constants instead of

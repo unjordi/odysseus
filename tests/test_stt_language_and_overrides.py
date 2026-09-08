@@ -72,9 +72,61 @@ def test_anti_hallucination_parameters_reach_faster_whisper():
 
 def test_default_glossary_is_a_term_list_not_a_sentence():
     """A prose prompt is what the decoder echoed back ("Términos frecuentes en
-    español de México." x20) when there was no speech."""
-    assert "Transcripción" not in DEFAULT_STT_INITIAL_PROMPT
-    assert DEFAULT_STT_INITIAL_PROMPT.count(",") >= 5
+    español de México." x20) when there was no speech.
+
+    Asserted on the SHIPPED copy (DEFAULT_SETTINGS), not only on the service
+    constant: load_settings merges {**DEFAULT_SETTINGS, **saved}, so the value in
+    DEFAULT_SETTINGS is the one that reaches faster-whisper. Checking only the
+    service constant is what let the prose prompt keep shipping — that assertion
+    was green while every dictation still got the echo.
+    """
+    for prompt in (DEFAULT_STT_INITIAL_PROMPT, DEFAULT_SETTINGS["stt_initial_prompt"]):
+        assert "Transcripción" not in prompt
+        assert "Términos frecuentes" not in prompt
+        assert prompt.count(",") >= 5
+
+
+def test_stt_defaults_have_exactly_one_definition():
+    """The service constants and the shipped settings must BE the same object.
+
+    Three places wanted these values (DEFAULT_SETTINGS, the STT service, the
+    voice-endpoint reset in routes/model_routes) and each kept its own literal.
+    They drifted: the service said `large-v3-turbo` + a bare glossary while
+    DEFAULT_SETTINGS — the copy that wins — still said `base`-era prose. This
+    pins them to the single definition in src.constants so the next edit cannot
+    land in the copy nobody reads.
+    """
+    from src import constants
+
+    assert DEFAULT_SETTINGS["stt_model"] is constants.DEFAULT_STT_MODEL
+    assert DEFAULT_SETTINGS["stt_language"] is constants.DEFAULT_STT_LANGUAGE
+    assert DEFAULT_SETTINGS["stt_initial_prompt"] is constants.DEFAULT_STT_INITIAL_PROMPT
+    assert DEFAULT_STT_MODEL is constants.DEFAULT_STT_MODEL
+    assert DEFAULT_STT_LANGUAGE is constants.DEFAULT_STT_LANGUAGE
+    assert DEFAULT_STT_INITIAL_PROMPT is constants.DEFAULT_STT_INITIAL_PROMPT
+
+
+def test_deleting_a_voice_endpoint_does_not_downgrade_whisper_to_base():
+    """Removing a TTS/STT endpoint resets the model to the shipped default.
+
+    It used to reset it to the literal "base" — the Whisper model the large-v3
+    upgrade existed to escape — so deleting an unrelated endpoint silently
+    brought the mangled tech jargon back.
+    """
+    from routes.model_routes import _clear_speech_settings_for_endpoint
+
+    settings = {
+        "stt_provider": "endpoint:abc123",
+        "stt_model": "whatever-the-endpoint-served",
+        "tts_provider": "disabled",
+        "tts_model": "tts-1",
+    }
+    cleared = _clear_speech_settings_for_endpoint(settings, "abc123")
+
+    assert cleared == ["Speech to Text"]
+    assert settings["stt_provider"] == "disabled"
+    assert settings["stt_model"] == DEFAULT_SETTINGS["stt_model"]
+    assert settings["stt_model"] != "base"
 
 
 def test_language_is_never_empty_even_if_setting_is_blank():
