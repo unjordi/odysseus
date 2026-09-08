@@ -411,3 +411,41 @@ def test_api_provider_gets_the_overridden_language(monkeypatch):
 
     assert service.transcribe(b"audio", {"language": "en"}) == "ok"
     assert seen == {"endpoint_id": "abc", "model": "whisper-1", "language": "en"}
+
+
+# ── Cierres de subtítulo pegados al final del clip (observado en vivo 2026-09-08) ──────────────────
+# El trabalenguas de QA salió COMPLETO y bien reconocido, y traía un "¡Gracias!" que nadie dijo: el clip
+# termina, el decoder sigue un token más y estampa la despedida del corpus de subtítulos con el que se
+# entrenó. No tiene ninguna de las dos firmas que ya cazaba el filtro (aparece UNA vez, así que no es un
+# loop; y es demasiado corta para el test de solape con el prompt, que exige ≥4 palabras).
+
+TRABALENGUAS_QA = (
+    "El piso está enladrillado. ¿Quién lo desenladrillará? El desenladrillador. "
+    "Que lo desenladrillase, buen desenladrillador será."
+)
+
+
+def test_cierre_alucinado_se_quita_y_el_dictado_queda_intacto():
+    assert filter_degenerate_text(TRABALENGUAS_QA + " ¡Gracias!", "") == TRABALENGUAS_QA
+
+
+def test_cierres_encadenados_no_se_llevan_la_frase_real():
+    # Dos despedidas seguidas. Antes esto devolvía "" porque los descartes alimentaban la regla de
+    # "el clip era casi todo basura" — perder el dictado es peor que el artefacto que se quería quitar.
+    assert filter_degenerate_text("Revisa el commit. ¡Gracias! ¡Suscríbete al canal!", "") == "Revisa el commit."
+
+
+def test_cierre_con_tilde_tambien_cae():
+    # `_normalize` conserva los acentos, así que la comparación PLIEGA (ver `_fold`): una lista escrita en
+    # ASCII no habría casado nunca con "suscríbete".
+    assert filter_degenerate_text("Manda el pull request. ¡Suscríbete al canal!", "") == "Manda el pull request."
+
+
+def test_un_gracias_solo_es_habla_real_y_se_conserva():
+    # El candado que hace aceptable la lista: si el clip no tiene NADA más, quien dictó quería decir eso.
+    assert filter_degenerate_text("Gracias.", "") == "Gracias."
+
+
+def test_gracias_en_medio_del_dictado_se_conserva():
+    # Solo se mira la ÚLTIMA frase; un agradecimiento en medio es habla.
+    assert filter_degenerate_text("Gracias por venir. Nos vemos mañana.", "") == "Gracias por venir. Nos vemos mañana."
