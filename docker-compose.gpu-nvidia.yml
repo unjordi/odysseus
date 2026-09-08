@@ -11,7 +11,15 @@
 # for setup details.
 services:
   odysseus:
-    build: .
+    build:
+      context: .
+      args:
+        # DEPS OPCIONALES ACTIVADAS (PyMuPDF ⇒ el visor de PDF). Upstream las deja fuera a propósito para
+        # que la imagen por defecto sea MIT-core; PyMuPDF es AGPL-3.0. Aquí se encienden porque este es el
+        # despliegue PERSONAL de unjordi: la AGPL obliga a ofrecer el fuente a quien recibe el servicio por
+        # red, y aquí el único que lo recibe es su dueño (bind en 127.0.0.1, con auth).
+        # ⚠️ Si algún día esto se expone a terceros, la decisión se revisa — no se hereda por inercia.
+        INSTALL_OPTIONAL: "true"
     ports:
       - "${APP_BIND:-127.0.0.1}:${APP_PORT:-7000}:7000"
     volumes:
