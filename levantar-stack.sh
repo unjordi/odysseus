@@ -9,7 +9,6 @@
 #   ./levantar-stack.sh --sin-axon     # el stack sin el main car (debug de Odysseus a pelo, :7000)
 #   ./levantar-stack.sh --sin-ollama   # deja el Ollama NATIVO del host (no levanta el del stack)
 #   ./levantar-stack.sh --sin-publicar # NO publica la imagen: consume el AXON_IMAGE_TAG que ya le den
-#   ./levantar-stack.sh --solo-axon    # recrea SOLO el servicio `axon` sobre un stack ya arriba
 #
 # POR QUÉ ES UN SCRIPT Y NO UN `docker compose up` a mano: el `-f` correcto son CUATRO archivos, y la
 # imagen de axon tiene que construirse DESDE `origin/develop` (no desde el árbol de trabajo) para que lo
@@ -17,35 +16,40 @@
 # 12 PRs mergeadas corriendo en ninguna parte (2026-09-07).
 #
 # ─────────────────────────────────────────────────────────────────────────────────────────────────────
-# EL MODO CD: `--sin-publicar --solo-axon`  (lo usa el workflow deploy-axon de axon)
+# EL MODO CD: `--sin-publicar`  (lo usa el workflow deploy-axon de axon)
 # ─────────────────────────────────────────────────────────────────────────────────────────────────────
 # El CD de axon (`axon/.github/workflows/deploy-axon.yml`) ya buildeó y publicó la imagen en su job de
 # cloud; lo único que le falta es que el stack SIRVA esa imagen. Antes hacía un `docker run` suelto con
 # `--name axon-maincar -p 7001:7001` — un contenedor FUERA del proyecto de compose, que colisionaba en
 # :7001 con el servicio `axon` de este stack (y con el axon nativo). Ese `docker run` se retiró; ahora el
-# CD entra POR AQUÍ, con las dos banderas de arriba, y el resultado es un servicio más del proyecto
-# `odysseus` — no una pieza suelta que nadie ve en `docker compose ps`.
-#   AXON_IMAGE_TAG=<sha-corto> ./levantar-stack.sh --sin-publicar --solo-axon
+# CD entra POR AQUÍ y el resultado es un servicio más del proyecto `odysseus` — no una pieza suelta que
+# nadie ve en `docker compose ps`.
+#   AXON_IMAGE_TAG=<sha-corto> ./levantar-stack.sh --sin-publicar
+#
+# HUBO una segunda bandera, `--solo-axon`, que recreaba SOLO el servicio `axon` (`up -d --no-deps axon`)
+# sobre un stack ya arriba, con su propio preflight, su reporte acotado y su exit code. Se ELIMINÓ el
+# 2026-09-07 por decisión explícita de unjordi: el cómputo local es GRATIS y este script reconstruye y
+# levanta TODO, SIEMPRE. Un despliegue parcial es justamente lo que esconde el drift — deja a los demás
+# servicios sirviendo lo de anteayer sin que nada lo diga — y además tapa el mal manejo de ramas: si
+# `develop` del fork trae algo que ni compila, un CD que no reconstruye Odysseus nunca se entera. Es la
+# misma dirección en la que murió `--sin-build` el mismo día, después de que un QA se hiciera sobre una
+# imagen rancia.
+# CONSECUENCIA QUERIDA Y EXPLÍCITA: un push a `develop` de AXON reconstruye el stack ENTERO de Odysseus,
+# no solo axon. NO es un descuido ni una regresión a "optimizar" dentro de tres meses: es el punto.
 set -euo pipefail
 cd "$(dirname "$0")"   # el project dir del compose ES este directorio (las rutas relativas dependen de él)
 
 AXON_REPO="${AXON_REPO:-$HOME/code/axon}"
-CON_AXON=1; CON_OLLAMA=1; SOLO_CONFIG=0; PUBLICAR=1; SOLO_AXON=0
+CON_AXON=1; CON_OLLAMA=1; SOLO_CONFIG=0; PUBLICAR=1
 for a in "$@"; do
   case "$a" in
     --config)        SOLO_CONFIG=1 ;;
     --sin-axon)      CON_AXON=0 ;;
     --sin-ollama)    CON_OLLAMA=0 ;;
     --sin-publicar)  PUBLICAR=0 ;;
-    --solo-axon)     SOLO_AXON=1 ;;
     *) echo "✗ opción desconocida: $a" >&2; exit 2 ;;
   esac
 done
-
-# `--solo-axon` recrea el servicio `axon` y NADA más ⇒ pedirlo junto a `--sin-axon` es una contradicción
-# que solo puede venir de un error de invocación. Se dice y se para, en vez de "ganar" una de las dos en
-# silencio y dejar al invocador creyendo que desplegó.
-[ "$SOLO_AXON" = 1 ] && [ "$CON_AXON" = 0 ] && { echo "✗ --solo-axon y --sin-axon se contradicen" >&2; exit 2; }
 
 # ── el `-f`: base probada + overlays. `docker-compose.gpu-nvidia.yml` es el standalone que YA levanta el
 #    stack en vivo (equivale a docker-compose.yml + docker/gpu.nvidia.yml); no se cambia para no recrear
@@ -105,36 +109,14 @@ if [ "$CON_AXON" = 1 ]; then
   fi
 fi
 
-# ── PREFLIGHT de `--solo-axon`: el stack tiene que estar YA ARRIBA ───────────────────────────────────
-# POR QUÉ NO LEVANTA EL STACK COMPLETO cuando no lo está (la decisión, no el atajo):
-#   • Este modo lo dispara un `git push` a develop. Levantar el stack entero desde ahí significaría que
-#     un push de código arranca ollama (34 GB de pesos), tts, searxng, chromadb y ntfy — y, peor, que
-#     TOMA decisiones de infraestructura que el preflight de este mismo script deja a un humano a
-#     propósito (masquear el ollama.service nativo, liberar :11434). Un CD que provisiona infra a
-#     espaldas del operador es exactamente cómo se rompe una máquina de noche.
-#   • `--no-deps` sobre un stack caído dejaría a axon arriba proxeando a la nada: la PUERTA de un
-#     edificio vacío. El primer page-load da 502 y parece un bug de axon.
-# ⇒ Se para con un mensaje que dice qué correr. Levantar el stack es un acto DELIBERADO del operador:
-#   `./levantar-stack.sh` (completo). Nada se recrea aquí a ciegas.
-if [ "$SOLO_AXON" = 1 ] && [ "$SOLO_CONFIG" = 0 ]; then
-  if ! docker compose "${FILES[@]}" -p odysseus ps --status running --services 2>/dev/null | grep -qx odysseus; then
-    fatal "--solo-axon necesita el stack YA ARRIBA y el servicio \`odysseus\` no está corriendo.
-   axon es la PUERTA: todo lo que no es /api/chat_stream se proxea a http://odysseus:7000, así que
-   arrancarlo solo daría 502 en el primer page-load.
-   Levanta el stack tú (es deliberado, no automático):  ./levantar-stack.sh"
-  fi
-  # Ollama ausente NO es fatal: axon arranca y sirve la puerta; lo que pierde es el cerebro local. Se
-  # dice para que el reporte del final no parezca un misterio.
-  if [ "$CON_OLLAMA" = 1 ] && ! docker compose "${FILES[@]}" -p odysseus ps --status running --services 2>/dev/null | grep -qx ollama; then
-    aviso "el servicio \`ollama\` del stack NO está corriendo: axon va a quedar sin motor local (el chat
-   fallará en la primera petición, no en el arranque). Arréglalo con un  ./levantar-stack.sh  completo."
-  fi
-fi
-
-# Estos dos chequeos son sobre el ARRANQUE del contenedor de ollama. Con `--solo-axon` no se crea ese
-# contenedor (nadie va a pelear por :11434 ni a montar los pesos), así que exigirlos ahí sería frenar el
-# despliegue de axon por una condición que ese despliegue no toca.
-if [ "$CON_OLLAMA" = 1 ] && [ "$SOLO_AXON" = 0 ]; then
+# Estos dos chequeos son sobre el ARRANQUE del contenedor de ollama, y desde que se eliminó `--solo-axon`
+# aplican SIEMPRE que el overlay de ollama esté en el `-f` — también en el CD, que ya no tiene un modo
+# que se los salte. Es la consecuencia directa de "se levanta TODO, siempre": si el Ollama NATIVO tiene
+# tomado :11434, el despliegue PARA con el comando exacto en vez de dejar medio stack en pie. Antes esta
+# condición se le perdonaba al CD para que un push de código no provisionara infraestructura; hoy la
+# decisión es la contraria — el push RECONSTRUYE el stack — así que el preflight tiene que valer para
+# todos. El escape sigue siendo del operador, explícito:  ./levantar-stack.sh --sin-ollama
+if [ "$CON_OLLAMA" = 1 ]; then
   # Ollama nativo y el del stack pelean por :11434. `mask` y no `disable`: ollama-ram-pin.service declara
   # `Wants=ollama.service`, y un Wants= puede re-arrancar una unidad meramente deshabilitada.
   if [ "$SOLO_CONFIG" = 0 ] && systemctl is-active --quiet ollama.service 2>/dev/null; then
@@ -184,24 +166,13 @@ fi
 # SIN --remove-orphans, JAMÁS por reflejo: hoy `tts` viene de docker/gpu.tts.yml (ya en el -f de arriba),
 # pero cualquier servicio que alguien haya creado desde otro directorio moriría sin aviso. Si de verdad
 # quieres podar, mira primero `docker ps -a --filter label=com.docker.compose.project=odysseus`.
-if [ "$SOLO_AXON" = 1 ]; then
-  # `--no-deps`: NO tocar a los vecinos. La dependencia `axon → odysseus (healthy)` ya está satisfecha
-  # por el ESTADO REAL — el preflight de arriba comprobó que odysseus corre —, así que dejar que compose
-  # la "resuelva" solo lograría que recreara odysseus (y con él la app entera) por un deploy de axon.
-  # Sin `--build` tampoco: el servicio `axon` no tiene `build:` (a propósito) y el resto no se toca.
-  echo "═══ 2/2 · recreando SOLO el servicio 'axon' del proyecto 'odysseus' ═══"
-  docker compose "${FILES[@]}" -p odysseus up -d --no-deps axon
-else
-  echo "═══ 2/2 · up del stack (proyecto 'odysseus') ═══"
-  docker compose "${FILES[@]}" -p odysseus up -d --build
-fi
-
-# En `--solo-axon` todo lo que sigue (espera, tabla de salud, smokes) se acota al servicio que se tocó:
-# reportar la salud de seis servicios que nadie recreó confunde el diagnóstico y, peor, haría que el CD
-# fallara por un `chromadb` que ya estaba enfermo antes del push. Vacío = todos (el comportamiento de
-# siempre). Va SIN comillas en los `ps` de abajo justo para que vacío signifique "sin argumento"; un
-# nombre de servicio de compose no lleva espacios, así que no hay nada que partir.
-SVC_FILTRO=""; [ "$SOLO_AXON" = 1 ] && SVC_FILTRO="axon"
+# SIEMPRE el stack COMPLETO, con `--build`. No hay un modo que toque un solo servicio: `--build` sobre
+# los servicios que tienen `build:` (odysseus) y la imagen ya publicada para los que no (axon, que a
+# propósito no tiene `build:`), y compose recrea únicamente lo que cambió. El costo de reconstruir lo
+# que no cambió son segundos de caché; el de desplegar una pieza sobre un stack rancio ya costó una
+# tarde de QA sobre código viejo.
+echo "═══ 2/2 · up del stack COMPLETO (proyecto 'odysseus') ═══"
+docker compose "${FILES[@]}" -p odysseus up -d --build
 
 # ── 3/3 · REPORTE DE SALUD. El `up -d` vuelve en cuanto los contenedores están CREADOS, no cuando los
 #    servicios sirven: sin esto el script terminaba con un "✅ stack arriba" que solo probaba que docker
@@ -216,7 +187,7 @@ ESPERA_MAX="${ESPERA_MAX:-180}"
 t0=$SECONDS
 while :; do
   # `--format json` da una línea JSON por servicio. Health vacío = servicio sin healthcheck declarado.
-  pendientes="$(docker compose "${FILES[@]}" -p odysseus ps ${SVC_FILTRO} --format json 2>/dev/null \
+  pendientes="$(docker compose "${FILES[@]}" -p odysseus ps --format json 2>/dev/null \
     | grep -c '"Health":"starting"' || true)"
   [ "${pendientes:-0}" -eq 0 ] && break
   if [ $((SECONDS - t0)) -ge "$ESPERA_MAX" ]; then
@@ -232,7 +203,7 @@ printf '%-12s %-10s %s\n' "────────" "─────" "──�
 malos=0
 # El `ps` se lee UNA vez y se recorre: dos llamadas podrían ver estados distintos y reportar algo que
 # nunca existió a la vez.
-snapshot="$(docker compose "${FILES[@]}" -p odysseus ps ${SVC_FILTRO} --format '{{.Service}}\t{{.State}}\t{{.Health}}' 2>/dev/null || true)"
+snapshot="$(docker compose "${FILES[@]}" -p odysseus ps --format '{{.Service}}\t{{.State}}\t{{.Health}}' 2>/dev/null || true)"
 while IFS=$'\t' read -r svc estado salud; do
   [ -n "$svc" ] || continue
   case "$salud" in
@@ -253,11 +224,10 @@ done <<< "$snapshot"
 # son justo las dos cosas que distinguen "el contenedor está arriba" de "el servicio SIRVE". Aquí, una
 # sola vez por despliegue, sí se pueden pagar.
 #
-# En `--solo-axon` NO se corren: son smokes de `tts` y `searxng`, dos servicios que este modo no recrea.
-# El CD dispara en CADA push a develop, y sintetizar audio + salir a los motores de búsqueda de internet
-# en cada push es pagar dos veces por algo que no se tocó — y le da al deploy de axon dos formas nuevas
-# de "fallar" por causas ajenas.
-if [ "$SOLO_AXON" = 0 ]; then
+# Se corren SIEMPRE, también en el CD. Antes se saltaban cuando el despliegue solo tocaba a axon, con el
+# argumento de que eran smokes de servicios ajenos; con el stack recreándose entero en cada corrida ya no
+# hay tal cosa como un servicio "que no se tocó" — y un tts que arrancó pero no sintetiza es exactamente
+# el fallo que este reporte existe para cazar, venga el despliegue de donde venga.
 echo
 echo "── verificaciones de una sola vez (demasiado caras para un healthcheck) ──"
 
@@ -287,7 +257,6 @@ if docker compose "${FILES[@]}" -p odysseus ps --status running --services 2>/de
     echo "             el formato 'json' deshabilitado en settings.yml → config/searxng/settings.yml"
   fi
 fi
-fi   # fin de los smokes caros (saltados en --solo-axon)
 
 # ── El chequeo de drift: qué commit sirve axon vs. qué está integrado ────────────────────────────────
 if [ "$CON_AXON" = 1 ]; then
@@ -320,22 +289,24 @@ fi
 
 echo
 if [ "$malos" -eq 0 ]; then
-  if [ "$SOLO_AXON" = 1 ]; then
-    echo "✅ servicio 'axon' recreado y sano. Abre:  https://127.0.0.1:${AXON_SERVE_PORT:-7001}"
-  else
-    echo "✅ stack arriba y sano. Abre:  https://127.0.0.1:${AXON_SERVE_PORT:-7001}"
-  fi
+  echo "✅ stack arriba y sano. Abre:  https://127.0.0.1:${AXON_SERVE_PORT:-7001}"
 else
   echo "⚠  stack arriba con $malos punto(s) a revisar (arriba dice cuál y dónde mirar)."
   echo "   Nada se declara LISTO hasta que eso esté en verde y lo veas tú."
 fi
 
-# ── EXIT CODE. En modo interactivo se conserva el 0 de siempre: el humano está leyendo la tabla y un
-#    exit≠0 solo le agregaría ruido a un reporte que ya dice qué mirar.
-#    En `--solo-axon` NO: ahí quien lee es el CD, y un job VERDE sobre un despliegue que no quedó es peor
-#    que no tener CD — es el drift invisible con un ✅ encima, que es justo lo que este stack existe para
-#    matar. Si axon no quedó sano o no sirve el commit desplegado, el job falla y se ve en rojo.
-if [ "$SOLO_AXON" = 1 ] && [ "$malos" -gt 0 ]; then
-  echo "   (saliendo con código 1: el despliegue de axon NO quedó verde)"
+# ── EXIT CODE: UNA sola semántica para los dos lectores — si algún servicio no llegó a sano (o axon no
+#    sirve el commit que se desplegó), el script sale ≠0.
+#    Antes había dos: `exit 0` siempre en modo interactivo (para no "agregarle ruido" al humano que ya
+#    está leyendo la tabla) y `exit 1` solo en el modo CD. Con `--solo-axon` fuera, el script ya no sabe
+#    quién lo invoca, así que tener dos semánticas exigiría re-inventar una bandera de "soy el CD" — el
+#    mismo atajo que se acaba de eliminar, y por el mismo motivo: multiplica los modos de fallar.
+#    Y no hace falta: el ≠0 le sirve al CD, que necesita ponerse rojo cuando el despliegue no quedó (un
+#    job VERDE sobre un despliegue a medias es el drift invisible con un ✅ encima), y no le estorba al
+#    humano, que ve la MISMA tabla de siempre — la salida en pantalla no cambia ni una línea. Al
+#    contrario: un `./levantar-stack.sh && algo` ahora se detiene cuando el stack no quedó, en vez de
+#    encadenar sobre un despliegue enfermo.
+if [ "$malos" -gt 0 ]; then
+  echo "   (saliendo con código 1: el stack NO quedó verde)"
   exit 1
 fi
