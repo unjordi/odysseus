@@ -1031,20 +1031,11 @@
           <span class="grow">Terminal</span>
         </div>
 
-        <!-- Axon Config ya NO abre un modal propio: es un PUNTERO a su única
-             casa, Settings › Axon (lo cablea axonConfig.js). El id se conserva
-             para no romper lo que ya lo referencia. -->
-        <div class="list-item" id="tool-axoncfg-btn" title="Abre Settings › Axon">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-            style="flex-shrink:0;opacity:0.5;">
-            <line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"/>
-            <line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"/>
-            <line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="currentColor" stroke="none"/>
-          </svg>
-          <span class="grow">Axon Config</span>
-        </div>
-
+        <!-- El renglón "Axon Config" se RETIRÓ del rail (#32). Vivía aquí como puntero a
+             Settings › Axon, pero un atajo en el rail a algo que ya tiene su casa en Settings es
+             justo el ítem suelto que este cambio venía a eliminar: dos entradas para una sola
+             config. Se llega por Settings › Axon, como el resto de la configuración.
+             `window.axonConfig.open()` sigue existiendo para quien la abra por código. -->
         <div class="list-item" id="tool-hoststats-btn">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;opacity:0.5;"><path d="M3 12h4l2 5 4-14 2 9 2-3h4"/></svg>
           <span class="grow">Host Stats</span>
@@ -2675,10 +2666,10 @@
   <!-- Toast container (aria-live for screen readers) -->
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-<!-- ── Axon Config ── El modal propio se RETIRÓ (#32): esta config vive ahora
-     dentro de Settings › Axon, que axonConfig.js pinta desde el schema de axon.
-     El módulo se sigue cargando aquí para cablear el puntero #tool-axoncfg-btn
-     y exponer window.axonConfig.open(). -->
+<!-- ── Axon Config ── El modal propio se RETIRÓ y el renglón del rail también (#32): esta
+     config vive SOLO dentro de Settings › Axon, que axonConfig.js pinta desde el schema de axon.
+     El módulo se sigue cargando aquí porque es quien PINTA ese panel al activarse
+     (onPanelActivated) y quien expone window.axonConfig.open() para abrirla por código. -->
 <script type="module" src="/static/js/axonConfig.js"></script>
 
 <!-- ── Cortex panel (estado de la cuota/ventana de 5h de Claude en el HOST) ──

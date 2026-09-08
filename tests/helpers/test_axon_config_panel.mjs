@@ -148,8 +148,8 @@ settingsModal.id = 'settings-modal';
 const axonPanel = settingsModal.appendChild(new El('div'));
 axonPanel.setAttribute('data-settings-panel', 'axon');
 axonPanel.dataset.settingsPanel = 'axon';
-const toolBtn = document.appendChild(new El('div'));
-toolBtn.id = 'tool-axoncfg-btn';
+// (Ya no se siembra un #tool-axoncfg-btn: ese renglón del rail se retiró en #32 y el módulo no
+//  cablea ningún botón. Era andamio que el test creaba y nunca asertaba.)
 
 /* ── Snapshot sintético ── */
 const SNAP = {
