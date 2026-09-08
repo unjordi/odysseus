@@ -543,6 +543,7 @@ function buildFixture(document) {
     'added-models',
     'ai',
     'search',
+    'axon',
     'integrations',
     'email',
     'reminders',
@@ -833,6 +834,17 @@ const STUBS = new Map([
     path.join(JS, 'modalSnap.js'),
     {
       clearDockSide() {},
+    },
+  ],
+  [
+    // Settings only tells the Axon panel when its tab becomes visible; the
+    // panel itself talks to axon and owns its own DOM, so the smoke test
+    // stubs the notification instead of loading the real module.
+    path.join(JS, 'axonConfig.js'),
+    {
+      default: {
+        onPanelActivated() {},
+      },
     },
   ],
 ]);

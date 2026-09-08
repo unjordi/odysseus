@@ -27,6 +27,10 @@ import { providerLogo } from './providers.js';
 import { isAltGrEvent } from './platform.js';
 import { bindMenuDismiss } from './escMenuStack.js';
 import { invalidateSettings } from './appConfig.js';
+// The Axon panel renders itself from the schema axon publishes; Settings only
+// tells it when its tab becomes visible (lazy load, same shape as the AI tab's
+// refreshAiModelEndpoints()).
+import axonConfigPanel from './axonConfig.js';
 
 let initialized = false;
 let modalEl = null;
@@ -72,6 +76,12 @@ function onSettingsPanelActivated(tab) {
 
   // AI endpoints are intentionally refreshed only when entering the AI panel.
   if (tab === 'ai') refreshAiModelEndpoints();
+
+  // Axon's config is fetched from axon itself, so it is loaded only when the
+  // tab is actually opened — never on every Settings open.
+  if (tab === 'axon' && axonConfigPanel && typeof axonConfigPanel.onPanelActivated === 'function') {
+    axonConfigPanel.onPanelActivated();
+  }
 }
 
 function openAdminSettingsTab(tab) {
@@ -5687,5 +5697,10 @@ export function close() {
 
 const settingsModule = { open, close, initIntegrations, initUnifiedIntegrations, syncAdminVisibility, refreshAiModelEndpoints };
 
+// Expose the module on window for the self-contained widgets that need to open
+// Settings on a given tab without importing this file (axonConfig.js), and for
+// calendar.js, which already probed for `window.settingsModule` but never found
+// it because nothing assigned it.
+window.settingsModule = settingsModule;
 
 export default settingsModule;

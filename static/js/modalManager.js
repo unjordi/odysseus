@@ -1429,10 +1429,11 @@ const _AUTO_WIRE = {
   'theme-modal':          { rail: null,             sidebar: 'tool-theme-btn' },
   'settings-modal':       { rail: null,             sidebar: 'tool-settings-btn' },
   'compare-model-overlay':{ rail: 'rail-compare',   sidebar: 'tool-compare-btn' },
-  // rail-hoststats/rail-axoncfg were merged into the single #rail-axon launcher,
-  // so the minimize badge now lands on the grouped button; sidebar openers keep IDs.
+  // rail-hoststats was merged into the single #rail-axon launcher, so the
+  // minimize badge now lands on the grouped button; sidebar openers keep IDs.
+  // The axon config modal is gone (#32): it lives inside Settings now, so there
+  // is nothing here to minimize or restore.
   'hoststats-modal':      { rail: 'rail-axon',      sidebar: 'tool-hoststats-btn' },
-  'axoncfg-modal':        { rail: 'rail-axon',      sidebar: 'tool-axoncfg-btn' },
   'ge-shortcuts-modal':   { rail: null,             sidebar: null },
   // Prompt window opens from the overflow menu (no rail/sidebar button), but
   // wiring it here makes tab-down use the new .minimized-dock-chip instead of

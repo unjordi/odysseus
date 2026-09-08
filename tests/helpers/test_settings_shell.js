@@ -259,6 +259,7 @@ function buildFixture(document) {
     'added-models',
     'ai',
     'search',
+    'axon',
     'integrations',
     'email',
     'reminders',
@@ -378,6 +379,7 @@ function moduleSource(relativePath) {
       'added-models',
       'ai',
       'search',
+      'axon',
       'integrations',
       'email',
       'reminders',
@@ -405,7 +407,7 @@ function moduleSource(relativePath) {
     'Settings registry keeps services, models, integrations and admin panels on the existing admin controller',
     ['services', 'added-models', 'integrations', 'tools', 'users', 'system']
       .every(id => context.isAdminManagedSettingsTab(id))
-      && ['ai', 'search', 'email', 'reminders', 'appearance', 'shortcuts', 'account']
+      && ['ai', 'search', 'axon', 'email', 'reminders', 'appearance', 'shortcuts', 'account']
         .every(id => !context.isAdminManagedSettingsTab(id)),
   );
 
