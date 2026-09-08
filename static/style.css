@@ -42245,3 +42245,8 @@ body.hoststats-compact-docked .chat-input-bar {
 #term-xterm.hidden,
 #term-oneshot.hidden { display: none !important; }
 
+/* Ícono PROPIO de Cortex (assets/icon-small.svg del repo cortex). Va como <img> y no inline porque
+   trae sus propios gradientes y colores de marca: no es un glifo monocromo que deba heredar
+   currentColor, y pesa 10 KB — inline se duplicaría en cada uno de los tres lugares donde aparece. */
+.cortex-glyph { width: 1em; height: 1em; vertical-align: -0.15em; margin-right: 6px; flex: 0 0 auto; border-radius: 3px; }
+.axon-flyout-item .cortex-glyph, .rail-item .cortex-glyph { width: 1.15em; height: 1.15em; }
