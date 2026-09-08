@@ -83,6 +83,15 @@ services:
       # sin getUserMedia) — por eso el cert wildcard *.pisa.mx va montado abajo y no hay reverse proxy.
       - "${AXON_BIND:-0.0.0.0}:${AXON_SERVE_PORT:-7001}:7001"
     environment:
+      # $HOME DEL PROCESO — declarado explícito porque MEDIA CONFIGURACIÓN DE ABAJO DEPENDE DE ÉL. axon
+      # resuelve con `process.env.HOME` tanto su estado (~/.axon, ~/.cache/axon) como los datos que
+      # sirve por /api/cortex/* (~/.cache/cortex, ~/.claude, ~/code/cortex). Sin esta línea el valor lo
+      # decide /etc/passwd de la imagen base (uid 1000 = `node` en node:22-slim ⇒ /home/node): un dato
+      # invisible desde este archivo, que ya causó que dos binds se montaran en `/axon-home` y NUNCA se
+      # leyeran (ver el bloque de volumes). Fijarlo aquí hace que los destinos de `volumes:` y el HOME
+      # que axon consulta sean UNA sola decisión legible en un solo lugar.
+      # ⚠️ Si cambias este valor, cambia los destinos `/home/node/...` de `volumes:` en la misma tanda.
+      - HOME=/home/node
       # Motor de inferencia. Con el overlay docker/ollama.yml, `ollama` es un servicio de ESTE stack y se
       # alcanza por la red interna. Si se levanta SIN ese overlay (Ollama nativo en el host), pásale
       #   AXON_OLLAMA_URL=http://host.docker.internal:11434
@@ -156,8 +165,42 @@ services:
       # vería lo del host y viceversa). Con el bind, contenedor y CLI comparten un solo corpus — y el que
       # ya existe NO se pierde al contenerizar. Concurrencia: los run records son un archivo por run (sin
       # contención) y el route-log es append-only; SQLite sobre un bind local maneja sus propios locks.
-      - ${AXON_STATE_DIR:-${HOME}/.axon}:/axon-home/.axon
-      - ${AXON_CACHE_DIR:-${HOME}/.cache/axon}:/axon-home/.cache/axon
+      #
+      # ⚠️ EL DESTINO ES `/home/node/...`, **NO** `/axon-home/...` (arreglado 2026-09-07; antes decía
+      # `/axon-home` y estos DOS BINDS ESTABAN MUERTOS — montados pero jamás leídos). El porqué, para que
+      # no se vuelva a romper:
+      #   • axon resuelve estas rutas con `process.env.HOME` (src/server/cortex-quota.ts:31, y el resto
+      #     del harness igual). NO existe ninguna env `HOME=/axon-home`: el Dockerfile de axon no la
+      #     setea, ni crea /axon-home, ni tiene los `ARG AXON_UID/AXON_GID` que el comentario de abajo
+      #     afirmaba. `/axon-home` lo creaba Docker solo, root:root, como target del bind.
+      #   • el HOME REAL del proceso lo fija Docker desde /etc/passwd para el uid de `user:` — uid 1000
+      #     en node:22-slim es `node`, con home `/home/node`. MEDIDO en el contenedor vivo:
+      #     `HOME=/home/node`, y `/home/node/.cache/axon` estaba en el overlay EFÍMERO (dev=172) mientras
+      #     el bind del host colgaba sin lectores en `/axon-home/.cache/axon` (dev=33).
+      #   ⇒ el estado que este bloque promete persistir se perdía en cada recreate, en silencio.
+      # `HOME` va declarada explícita en `environment:` arriba para que el contrato se LEA aquí y no
+      # dependa de /etc/passwd de la imagen base.
+      - ${AXON_STATE_DIR:-${HOME}/.axon}:/home/node/.axon
+      - ${AXON_CACHE_DIR:-${HOME}/.cache/axon}:/home/node/.cache/axon
+      # ── DATOS DE CORTEX (widget "Claude · Cortex" del panel de Odysseus) ────────────────────────
+      # Los 5 endpoints `/api/cortex/*` que sirve axon (quota/stats/chats/sessions/brain) leen el
+      # filesystem del HOST — se escribieron cuando axon corría NATIVO, donde `$HOME` ERA el de unjordi.
+      # Al contenerizar axon (stack unificado, 2026-09-07) ese supuesto se rompió y el widget quedó
+      # "desconectado": los endpoints existen y responden 200, pero con
+      # `{ok:false, reason:"not_found"}` porque los archivos no estaban montados. Quién escribe qué:
+      #   ~/.cache/cortex/{state,stats,chats,sessions}.json → los escribe CORTEX EN EL HOST (el plasmoide
+      #       de KDE). El contenedor solo los LEE ⇒ `:ro`.
+      #   ~/.claude/ → el cerebro global; lo LEE `brain-scan.sh scan` para la pestaña Cerebro ⇒ `:ro`.
+      #   ~/code/cortex/ → aquí vive el propio `brain-scan.sh` que ejecuta /api/cortex/brain
+      #       (src/server/cortex-brain.ts busca `$HOME/code/cortex/src/plasmoid/contents/brain-scan.sh`,
+      #       primer candidato de CANDIDATE_REPO_DIRS) ⇒ `:ro`, solo se corre, no se escribe.
+      # LOS TRES VAN `:ro` A PROPÓSITO: es la superficie más sensible del host (cerebro + historial de
+      # uso). El contenedor no tiene por qué escribirla, y `ro` lo garantiza aunque un bug lo intente.
+      # La otra mitad de la protección ya existe y NO se toca: los `/api/cortex/*` están tras el gate de
+      # sesión de Odysseus (requireOdysseusAuth, fail-closed) — auditoría item 9, fuga de datos.
+      - ${CORTEX_CACHE_DIR:-${HOME}/.cache/cortex}:/home/node/.cache/cortex:ro
+      - ${CORTEX_CLAUDE_DIR:-${HOME}/.claude}:/home/node/.claude:ro
+      - ${CORTEX_REPO_DIR:-${HOME}/code/cortex}:/home/node/code/cortex:ro
     working_dir: /app
     # MISMO uid/gid que Odysseus (PUID/PGID). Es lo que hace que el estado de axon y —sobre todo— los
     # archivos que crea DENTRO del repo montado queden del USUARIO del host y no de root:
@@ -166,7 +209,12 @@ services:
     #     y el humano ya no puede podarlos ni operar el repo sin pkexec. Con uid 1000 no pasa.
     #   • app.db de Odysseus es 0600 del usuario 1000 → como root también se abre, pero cualquier journal
     #     (-wal/-shm) que cree axon quedaría root:root y Odysseus (que corre como PUID/PGID) fallaría.
-    # La imagen crea /axon-home ya con este dueño (ver Dockerfile de axon, ARG AXON_UID/AXON_GID).
+    # uid 1000 es `node` en node:22-slim, y `/home/node` (su HOME, ver `environment:`) ya viene creado y
+    # con ese dueño en la imagen base → los binds de estado cuelgan de un directorio escribible por el
+    # proceso, sin `chown` ni pasos extra en el Dockerfile.
+    # (Antes esta línea afirmaba que "la imagen crea /axon-home con este dueño, ver ARG AXON_UID/AXON_GID
+    # del Dockerfile de axon": NADA de eso existe en ese Dockerfile — no hay ARG de uid, ni /axon-home, ni
+    # ENV HOME. Era la doc que sostenía el bind muerto; se corrige aquí junto con el bind.)
     user: "${PUID:-1000}:${PGID:-1000}"
     extra_hosts:
       # Para alcanzar lo que siga en el HOST: FreeToken bajo demanda (:7090) y —si se corre sin el overlay

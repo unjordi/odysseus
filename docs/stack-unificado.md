@@ -449,15 +449,26 @@ comentado de las variables nuevas está en **`.env.stack.example`** (versionado;
 
 ## Estado persistente de axon
 
-Todo lo que el harness escribe vive bajo `$HOME` (que en la imagen es `/axon-home`, ya creado con dueño
-`1000:1000` para que un bind no llegue `root:root`):
+Todo lo que el harness escribe vive bajo `$HOME`, que es **`/home/node`** — el home del uid 1000 (`node`)
+en `node:22-slim`, ya creado y con ese dueño por la imagen base. El compose lo declara explícito
+(`HOME=/home/node` en `environment:`) para que los destinos de `volumes:` y el `$HOME` que axon consulta
+sean una sola decisión legible.
+
+> ⚠️ **Esto decía `/axon-home` y era FALSO** (corregido 2026-09-07). El Dockerfile de axon no crea ese
+> directorio, no setea `ENV HOME`, y no tiene los `ARG AXON_UID/AXON_GID` que esta doc y el compose
+> afirmaban: `/axon-home` lo creaba Docker solo, `root:root`, como target del bind. El `$HOME` real lo
+> fijaba `/etc/passwd` de la imagen base ⇒ **los binds de estado estaban MUERTOS**: montados pero jamás
+> leídos, con axon escribiendo a `/home/node/...` en el overlay efímero. Medido en el contenedor vivo:
+> `HOME=/home/node`, `/home/node/.cache/axon` en dev=172 (overlay) y el bind del host colgando sin
+> lectores en `/axon-home/.cache/axon` (dev=33). El estado que esta tabla promete se perdía en cada
+> recreate, en silencio.
 
 | ruta en el contenedor | qué es | ¿sobrevive? |
 |---|---|---|
-| `/axon-home/.axon/runs/*.json` | run records de `axon ps` (hoy 1.8 MB de historia) | **sí** — bind a `~/.axon` |
-| `/axon-home/.axon/plugins/` | plugins locales opt-in (#16) | **sí** — mismo bind |
-| `/axon-home/.axon/*.db` | **la BD SQLite de la bitácora de prompting** (rebanada aparte) | **sí** — el compose ya la contempla |
-| `/axon-home/.cache/axon/routes.jsonl` | route-log (append-only) | **sí** — bind a `~/.cache/axon` |
+| `/home/node/.axon/runs/*.json` | run records de `axon ps` (hoy 1.8 MB de historia) | **sí** — bind a `~/.axon` |
+| `/home/node/.axon/plugins/` | plugins locales opt-in (#16) | **sí** — mismo bind |
+| `/home/node/.axon/*.db` | **la BD SQLite de la bitácora de prompting** (rebanada aparte) | **sí** — el compose ya la contempla |
+| `/home/node/.cache/axon/routes.jsonl` | route-log (append-only) | **sí** — bind a `~/.cache/axon` |
 | `/odysseus-data/app.db` | sesiones compartidas con el SPA | **sí** — el mismo `data/` de Odysseus |
 | `/tmp/axon-delegate-*` | worktrees efímeros de los subagentes | **no, y está bien**: se crean y se borran dentro de una corrida; su valor queda en el repo montado |
 
