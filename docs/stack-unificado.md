@@ -68,32 +68,45 @@ dos no podían coexistir — y el job murió cuatro corridas seguidas con
 sobre **este** script:
 
 ```bash
-AXON_IMAGE_TAG=<sha-corto> ./levantar-stack.sh --sin-publicar --solo-axon
+AXON_IMAGE_TAG=<sha-corto> ./levantar-stack.sh --sin-publicar
 ```
 
-Las dos banderas nuevas, y por qué existen:
+La única bandera que usa el CD, y por qué existe:
 
 | bandera | qué hace | por qué |
 |---|---|---|
 | `--sin-publicar` | salta el paso 1/2 (`publish-axon.sh`) y consume el `AXON_IMAGE_TAG` que le den | el job de cloud **ya** buildeó esa imagen desde el commit que disparó el deploy. Re-buildear aquí duplicaría minutos en la máquina que además sirve el stack y —peor— construiría desde el `origin/develop` de *este* host, que puede no estar fetcheado y ser **otro commit** |
-| `--solo-axon` | `up -d --no-deps axon`: recrea **solo** ese servicio | un deploy de axon no debe recrear Odysseus ni a sus vecinos. `--no-deps` es seguro porque el preflight comprueba el estado **real**: si `odysseus` no corre, no despliega |
 
 Sin `--sin-publicar`, `AXON_IMAGE_TAG` se sigue calculando como siempre (el sha corto de `origin/develop`
 que deja `publish-axon.sh`): **el uso manual de `./levantar-stack.sh` no cambia en nada.**
 
-### Si el stack no está arriba, el CD **no lo levanta**: falla y dice qué correr
+### El CD levanta el stack COMPLETO — ya no hay un modo que toque solo a axon
 
-Es una decisión, no un hueco. Levantar el stack completo desde un push de código significaría arrancar
-Ollama (34 GB de pesos), TTS, SearXNG, ChromaDB y ntfy —y, sobre todo, **tomar decisiones de
-infraestructura que el preflight de este script deja a un humano a propósito**: masquear el
-`ollama.service` nativo, liberar `:11434`. Un CD que provisiona infra a espaldas del operador es cómo se
-rompe una máquina de madrugada. La alternativa —recrear axon con `--no-deps` sobre un stack caído— deja
-la **puerta de un edificio vacío**: axon arriba proxeando a la nada, 502 en el primer page-load y cara de
-bug de axon.
+Hubo una segunda bandera, `--solo-axon` (`up -d --no-deps axon` sobre un stack ya arriba), con su propio
+preflight —que exigía el stack en pie y si no, paraba diciendo qué correr—, su reporte acotado a un
+servicio y su exit code propio. **Se eliminó el 2026-09-07**, por decisión explícita de unjordi:
 
-Así que el preflight de `--solo-axon` exige que el servicio `odysseus` esté **corriendo**; si no, para con
-el mensaje `Levanta el stack tú (es deliberado, no automático): ./levantar-stack.sh`. Que `ollama` falte
-es solo un **aviso** (axon sirve la puerta, pierde el cerebro local), no un fatal.
+> *"nel, quítalo. el cómputo local es gratis. prefiero que SIEMPRE recompile todo y lo vuelva a levantar,
+> así también te cacho con mal manejo de ramas"*
+
+El argumento viejo era que un push de código no debe provisionar infraestructura a espaldas del operador
+(arrancar Ollama con 34 GB de pesos, masquear el `ollama.service` nativo, liberar `:11434`). El argumento
+que gana es que **un despliegue parcial es justamente donde se esconde el drift**: deja al resto del stack
+sirviendo lo de anteayer sin que nada lo diga, y encima tapa el mal manejo de ramas —si el `develop` del
+fork trae algo que ni compila, un CD que no reconstruye Odysseus jamás se entera—. Es la misma dirección
+en la que murió `--sin-build` el mismo día, después de que un QA entero se hiciera sobre una imagen rancia.
+El cómputo local no se cobra; una tarde de QA sobre código viejo, sí.
+
+**Consecuencia querida y explícita: un push a `develop` de axon reconstruye el stack ENTERO de Odysseus**,
+no solo el servicio `axon`. No es un descuido ni algo que "optimizar" de vuelta dentro de tres meses.
+
+De ahí se siguen dos cosas que antes se le perdonaban al modo CD y ahora aplican a todos:
+
+- **Los preflight de Ollama valen siempre.** Si el `ollama.service` NATIVO tiene tomado `:11434`, el
+  despliegue **para** con el comando exacto (`pkexec systemctl mask --now ollama.service`) en vez de dejar
+  medio stack en pie. El escape sigue siendo del operador y explícito: `./levantar-stack.sh --sin-ollama`.
+- **Los dos smokes caros (síntesis real del TTS, búsqueda JSON real de SearXNG) se corren siempre.** Con el
+  stack recreándose entero ya no existe un servicio "que no se tocó".
 
 ### Dos cosas más que cambiaron en el reporte
 
@@ -102,12 +115,14 @@ es solo un **aviso** (axon sirve la puerta, pierde el cerebro local), no un fata
   `origin/develop` local puede estar sin fetchear y reportaría un **drift falso** en cada corrida. De
   paso, comparar contra el tag caza algo que la otra comparación no: que el contenedor **de verdad se
   recreó** con la imagen nueva.
-- **En `--solo-axon` el script sale con código ≠ 0 si axon no quedó verde.** En modo interactivo se
-  conserva el `exit 0` de siempre (el humano está leyendo la tabla). Pero quien lee el modo CD es GitHub
-  Actions, y un job **verde sobre un despliegue que no quedó** es peor que no tener CD: es el drift
-  invisible con un ✅ encima. También se saltan los dos smokes caros (síntesis de TTS, búsqueda real de
-  SearXNG): son de servicios que este modo no recrea, y correrlos en cada push es pagar dos veces por
-  algo que no se tocó.
+- **El script sale con código ≠ 0 si algún servicio no quedó verde — una sola semántica, para los dos
+  lectores.** Hubo dos: `exit 0` siempre en modo interactivo (para no agregarle ruido al humano que está
+  leyendo la tabla) y `exit 1` solo en el modo CD. Sin `--solo-axon` el script ya no sabe quién lo invoca,
+  y tener dos semánticas exigiría re-inventar una bandera de "soy el CD" — el mismo atajo que se acaba de
+  eliminar. Tampoco hace falta: el ≠0 le sirve a GitHub Actions, que necesita ponerse **rojo** cuando el
+  despliegue no quedó (un job verde sobre un stack a medias es el drift invisible con un ✅ encima), y no
+  le estorba al humano, que ve la MISMA tabla de siempre — la salida en pantalla no cambia ni una línea.
+  De pilón, un `./levantar-stack.sh && algo` ahora se detiene en vez de encadenar sobre un stack enfermo.
 
 ### El contenedor viejo `axon-maincar` ahora **para** el despliegue
 
@@ -259,8 +274,9 @@ que es el lugar correcto para un chequeo caro — una vez por despliegue, no cad
 Al terminar el `up`, el script **espera** a que nadie siga en `starting` (tope `ESPERA_MAX`, 180 s por
 defecto, derivado del `start_period` mayor) y luego imprime una tabla `servicio · salud · qué significa /
 dónde mirar`, con el comando de logs ya escrito para el que esté mal. Después corre las dos verificaciones
-de una sola vez de arriba y el **chequeo de drift** (`/api/axon/version` contra
-`git rev-parse --short origin/develop`). Si algo quedó en rojo lo dice y **no** declara nada listo.
+de una sola vez de arriba y el **chequeo de drift** (`/api/axon/version` contra el **tag desplegado**,
+no contra el `origin/develop` de este host — ver arriba). Si algo quedó en rojo lo dice, **no** declara
+nada listo y **sale con código ≠ 0**.
 
 Un servicio **sin** healthcheck declarado se reporta como `➖ corriendo, SIN healthcheck` — no se disfraza
 de sano. Hoy no debería salir ninguno (los siete tienen el suyo); si aparece uno, es que se agregó un
@@ -571,9 +587,9 @@ sin cargar modelos). Las **seis** combinaciones de overlays validan con `docker 
    **y** —desde el fix del 2026-09-07— un broker reiniciado con el socket unix y el directorio del socket
    montado en el contenedor (`AXON_TERM_SOCKET_DIR`). Verde: el badge dice `host` (no `host-down`) y un
    `whoami` devuelve el usuario del host, no `root`.
-10. **El CD entero (`--sin-publicar --solo-axon`)**, y esto solo se prueba de una forma: **con un push a
-    `develop` de axon**. Lo que sí está comprobado sin mutar nada es que las seis combinaciones de
-    banderas siguen resolviendo con `docker compose config`, que el modo CD resuelve
-    `image: potenciaindustrial/axon:<tag>` (única línea que cambia contra el modo normal) y que los
-    preflight nuevos fallan con su mensaje y su exit code. Lo que **no** se ha ejercitado nunca: el
-    `up -d --no-deps axon` real, el reporte de salud acotado a un servicio y el exit≠0 del job.
+10. **El CD entero (`--sin-publicar`)**, y esto solo se prueba de una forma: **con un push a `develop` de
+    axon**. Lo que sí está comprobado sin mutar nada es que las combinaciones de banderas que quedan
+    siguen resolviendo con `docker compose config`, y que el modo CD resuelve
+    `image: potenciaindustrial/axon:<tag>` (única línea que cambia contra el modo normal). Lo que **no**
+    se ha ejercitado nunca: el `up -d --build` disparado por el CD (que desde el 2026-09-07 reconstruye el
+    stack ENTERO, no solo axon), la tabla de salud impresa de verdad y el exit≠0 pintando el job de rojo.
