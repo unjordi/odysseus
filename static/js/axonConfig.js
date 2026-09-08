@@ -737,11 +737,11 @@ function close() {
 function toggle() { open(); }
 
 function init() {
-  // El renglón "Axon Config" del sidebar de herramientas ya NO abre un modal
-  // propio: es un PUNTERO a la única casa de esta config (Settings › Axon).
-  const toolBtn = $('tool-axoncfg-btn');
-  if (toolBtn) toolBtn.addEventListener('click', open);
-
+  // Ya no se cablea ningún renglón del rail: ese ítem se retiró (#32). La config de axon se llega
+  // por Settings › Axon y nada más — un atajo en el rail a algo que ya tiene su casa en Settings
+  // deja dos entradas para una sola config, que es el ítem suelto que #32 venía a eliminar.
+  // `window.axonConfig.open()` se conserva: es la vía para abrirla por código (p. ej. un enlace
+  // profundo o un botón futuro), y es lo que usa el propio panel de Settings al activarse.
   window.axonConfig = { open, close, toggle, refresh: load, onPanelActivated };
 }
 
