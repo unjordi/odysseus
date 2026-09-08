@@ -29,6 +29,7 @@ import { previewZoneAt, clearPreview, snapModalToZone } from './tileManager.js';
 import { suspendDock, resumeDock, clearRightDock, applyEdgeDock } from './modalSnap.js';
 import { dismissOrRemove } from './escMenuStack.js';
 import { nextToolWindowZ } from './toolWindowZOrder.js';
+import WorkspaceState from './workspaceState.js';
 
 const _state = new Map(); // id -> { restoreFn, closeFn, railBtnId, isMinimized, restoreMinHeight }
 
@@ -36,18 +37,25 @@ const _rememberedDockKey = (id) => `odysseus-modal-remembered-dock-${id}`;
 function _rememberDock(id, side) {
   if (!id || !side) return;
   try { localStorage.setItem(_rememberedDockKey(id), side); } catch (_) {}
+  // Mirror into the shell state so the docked side follows the USER across
+  // browsers, not just this one. The legacy key keeps being written while the
+  // shell state is still the new kid — see workspaceState.js's migration note.
+  try { WorkspaceState.setDock(id, side); } catch (_) {}
 }
 function _forgetDock(id) {
   if (!id) return;
   try { localStorage.removeItem(_rememberedDockKey(id)); } catch (_) {}
+  try { WorkspaceState.setDock(id, null); } catch (_) {}
 }
 function _getRememberedDock(id) {
-  try {
-    const side = localStorage.getItem(_rememberedDockKey(id));
-    return (side === 'left' || side === 'right') ? side : null;
-  } catch (_) {
-    return null;
+  let side = null;
+  try { side = localStorage.getItem(_rememberedDockKey(id)); } catch (_) {}
+  if (side !== 'left' && side !== 'right') {
+    // Nothing local (fresh browser, or a logout wiped it): fall back to the
+    // per-user shell state, which is the copy that survives signout/signin.
+    try { side = WorkspaceState.get(id)?.dock || null; } catch (_) { side = null; }
   }
+  return (side === 'left' || side === 'right') ? side : null;
 }
 function _applyRememberedDock(id) {
   const side = _getRememberedDock(id);
@@ -75,6 +83,7 @@ function _bringToFront(modal) {
 }
 
 function _emitModalOpened(id, modal) {
+  try { WorkspaceState.markOpen(id); } catch (_) {}
   try {
     window.dispatchEvent(new CustomEvent('odysseus:modal-opened', {
       detail: { id, modal },
@@ -1254,6 +1263,7 @@ export function minimize(id) {
     }
   }
   s.isMinimized = true;
+  try { WorkspaceState.markMinimized(id, true); } catch (_) {}
   _setBadge(s.btnIds, true);
   _ensureDock();
   _renderDock();
@@ -1278,6 +1288,7 @@ export function restore(id) {
     _emitModalOpened(id, modal);
   }
   s.isMinimized = false;
+  try { WorkspaceState.markOpen(id); } catch (_) {}
   _setBadge(s.btnIds, false);
   // Intentionally don't clear _chipPositions here: on mobile a free-
   // positioned chip is meant to act as a persistent toggle that stays
@@ -1344,6 +1355,7 @@ export function close(id) {
     }
   }
   _setBadge(s.btnIds, false);
+  try { WorkspaceState.markClosed(id); } catch (_) {}
   _state.delete(id);
   _chipPositions.delete(id);
   _saveDockState();
@@ -1457,12 +1469,67 @@ function _autoRegister(id) {
 // button next to the close button. We do NOT pre-register here — only inject
 // the button. Registration happens when the modal is actually minimized,
 // either via the `_` button click or via swipe-dismiss.
+/**
+ * The launcher wiring of a known modal — `{ rail, sidebar }` button ids, or
+ * null if the id isn't a tool window. Exported so workspaceRestore.js reopens
+ * tools through the SAME table the rail dispatch uses instead of keeping a
+ * second copy that would drift the day a button is renamed.
+ */
+export function launcherFor(id) {
+  const wire = _AUTO_WIRE[id];
+  return wire ? { ...wire } : null;
+}
+
+/** Ids of every modal the shell knows how to track/restore. */
+export function knownModalIds() { return Object.keys(_AUTO_WIRE); }
+
+// ── Shell state: derive "what is open" from ONE sweep ──
+//
+// Deliberately a sweep and not N call sites. The 20-odd tools open themselves
+// in 20 different ways (some toggle `.hidden`, some set display, some rebuild
+// the node); asking each one to report would mean editing every module and
+// missing the ones added later. The scan below already runs once a second for
+// the minimize button, so reading visibility in the same pass is free — and it
+// picks up any modal added to _AUTO_WIRE with no further work.
+//
+// Nothing is recorded until workspaceRestore arms tracking: at page load no
+// modal is open yet, so an un-armed sweep would overwrite the very state it is
+// about to restore (see WorkspaceState.setTrackingArmed).
+// Ids whose window we have actually SEEN open in this session. Several tools
+// (gallery, calendar, notes…) build their modal on first open and REMOVE the
+// node on close, so "no element" means two different things: "closed just now"
+// for a window we watched open, and "not built yet" for one whose restore is
+// still in flight or failed. Only the first may overwrite the stored state —
+// otherwise a tool that is slow to appear would erase its own record.
+const _seenOpen = new Set();
+
+function _syncWorkspaceState() {
+  if (!WorkspaceState.isTrackingArmed()) return;
+  for (const id of Object.keys(_AUTO_WIRE)) {
+    const modal = document.getElementById(id);
+    if (!modal) {
+      if (_seenOpen.has(id)) { _seenOpen.delete(id); WorkspaceState.markClosed(id); }
+      continue;
+    }
+    const minimized = _state.get(id)?.isMinimized === true
+      || modal.classList.contains('modal-minimized');
+    if (minimized) { _seenOpen.add(id); WorkspaceState.markMinimized(id, true); continue; }
+    let visible = !modal.classList.contains('hidden');
+    if (visible) {
+      try { visible = getComputedStyle(modal).display !== 'none'; } catch (_) {}
+    }
+    if (visible) { _seenOpen.add(id); WorkspaceState.markOpen(id); }
+    else { _seenOpen.delete(id); WorkspaceState.markClosed(id); }
+  }
+}
+
 function _scanAndWire() {
   for (const id of Object.keys(_AUTO_WIRE)) {
     const modal = document.getElementById(id);
     if (!modal) continue;
     injectMinimizeButton(modal, id);
   }
+  try { _syncWorkspaceState(); } catch (e) { console.warn('[modalManager] workspace sync failed:', e); }
 }
 const _scanTimer = setInterval(_scanAndWire, 1000);
 // First scan after DOM ready

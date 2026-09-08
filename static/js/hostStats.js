@@ -20,12 +20,17 @@
 // ============================================
 
 import { makeWindowDraggable } from './windowDrag.js';
+import WorkspaceState from './workspaceState.js';
 
 const MODAL_ID = 'hoststats-modal';
 const ENDPOINT = '/api/hwfit/live';
 const REFRESH_MS = 1500;
 const SEGMENTS = 24; // segmented-bar resolution (full mode)
 const COMPACT_SEGMENTS = 10; // segmented-bar resolution (compact chips)
+// DEPRECATED — read-only. The view mode now lives in the shell state
+// (workspaceState.js), which is per USER and survives a signout; this key is
+// only still read so an existing browser keeps its mode on the first load
+// after the upgrade. workspaceState's migration folds it in once.
 const MODE_KEY = 'odysseus.hostStats.viewMode.v1';
 
 let _timer = null;
@@ -222,18 +227,29 @@ function renderError(msg) {
   }
 }
 
-// ── View-mode toggle (full ⇄ compact), persisted per-browser ──
+// ── View-mode toggle (full ⇄ compact), persisted per USER ──
+//
+// This is the first consumer of the shell state (roadmap #29): "full or
+// compact" is a MODE of a module, so it belongs to the workspace state, not to
+// a key this widget owns. The read stays synchronous — it hits the shell's
+// localStorage cache — because the mode must be applied at page load, before
+// the panel is ever opened. The authoritative per-user value lands later and
+// init() re-applies it if it disagrees.
 
 function loadMode() {
   try {
-    const v = localStorage.getItem(MODE_KEY);
+    const m = WorkspaceState.get(MODAL_ID)?.mode;
+    if (m === 'compact' || m === 'full') return m;
+  } catch {}
+  try {
+    const v = localStorage.getItem(MODE_KEY);   // legacy fallback (see MODE_KEY)
     if (v === 'compact' || v === 'full') return v;
   } catch {}
   return 'full';
 }
 
 function saveMode(mode) {
-  try { localStorage.setItem(MODE_KEY, mode); } catch {}
+  try { WorkspaceState.setMode(MODAL_ID, mode); } catch {}
 }
 
 function applyMode(mode, opts) {
@@ -369,6 +385,16 @@ function init() {
   }
   // Reflect the persisted mode immediately, before the first poll ever runs.
   applyMode(_mode, { skipRerender: true, skipSave: true });
+
+  // …then reconcile with the per-user state once it arrives from the server.
+  // This is the path that carries the mode across devices and back from a
+  // signout/signin (which wipes localStorage on purpose).
+  WorkspaceState.ready().then(() => {
+    const m = WorkspaceState.get(MODAL_ID)?.mode;
+    if ((m === 'compact' || m === 'full') && m !== _mode) {
+      applyMode(m, { skipSave: true });
+    }
+  }).catch(() => {});
 
   // Make the panel draggable/snappable, same mechanism as the other tool
   // windows (Cookbook, Calendar, Gallery…) — grab the header, drop on an
