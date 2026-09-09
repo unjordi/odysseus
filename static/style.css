@@ -4617,9 +4617,13 @@ body.bg-pattern-sparkles {
     .code-runner-output,
     .doc-run-output { padding-right: 110px; }
 
-    /* Terminal widget (rail-term / tool-term-btn → #term-modal). Wider/taller than the default
-       .modal-content — a shell wants room — mirroring #cookbook-modal's own size override. */
-    #term-modal .modal-content {
+    /* Terminal widget (rail-term / tool-term-btn → .term-modal). Wider/taller than the default
+       .modal-content — a shell wants room — mirroring #cookbook-modal's own size override.
+       POR CLASE, no por id (#29a): la 2ª, 3ª… terminal son CLONES con ids sufijados (term-modal--2), así que
+       una regla `#term-modal …` solo habría vestido a la primera y las demás habrían salido con el tamaño
+       genérico de `.modal-content`. Se usan TRES clases a propósito: la regla base `.modal-content` (una sola
+       clase) aparece MÁS ABAJO en este archivo y, a igual especificidad, ganaría por orden de fuente. */
+    .modal.term-modal .term-modal-content {
       width:min(760px, 92vw);
       height:min(560px, 82vh);
       max-height:82vh;
@@ -4629,6 +4633,14 @@ body.bg-pattern-sparkles {
       opacity:0.6; border:1px solid var(--border); border-radius:4px;
       padding:1px 5px; margin-left:6px; vertical-align:1px; cursor:help;
     }
+    /* `+` = otra terminal, con su propio shell. Discreto y del mismo tamaño que Clear: es una acción
+       frecuente pero no la principal del encabezado. */
+    .term-new-btn {
+      background:none; border:1px solid var(--border,#3a3a3a); color:var(--text-dim,#9aa);
+      cursor:pointer; font-size:13px; line-height:1; border-radius:6px; padding:2px 8px;
+      margin-right:8px; flex-shrink:0;
+    }
+    .term-new-btn:hover { border-color:var(--accent-primary, var(--red)); color:var(--accent-primary, var(--red)); }
     /* host = corre en tu compu (broker), no en el contenedor — acento distinto para que salte a la vista */
     .term-scope-badge.host { opacity:0.9; color:var(--green); border-color:var(--green); }
     /* host-down = hay broker configurado pero NO responde ⇒ los comandos van a fallar (y NO se cae al shell
@@ -42371,8 +42383,13 @@ body.hoststats-compact-docked .chat-input-bar {
   src: url('/static/lib/fonts/MesloLGSDZNerdFontMono-Bold.woff2') format('woff2');
 }
 
-/* Contenedor del emulador xterm.js (modo PTY). Debe tener tamaño concreto ANTES de medir cols/rows. */
-#term-xterm.term-xterm {
+/* Contenedor del emulador xterm.js (modo PTY). Debe tener tamaño concreto ANTES de medir cols/rows.
+   TODO ESTE BLOQUE VA POR CLASE, NO POR ID (#29a, 2026-09-08): con varias terminales a la vez solo la
+   primera conserva `id="term-xterm"` — las demás son clones con el id sufijado (`term-xterm--2`). Una regla
+   `#term-xterm…` habría dejado a la segunda terminal SIN el padding asimétrico, SIN el gutter estable y sin
+   el corte de herencia de `letter-spacing` de abajo: o sea, con exactamente los dos bugs de geometría que
+   estos comentarios documentan. La clase ya estaba en el elemento; solo se le quitó la muleta del id. */
+.term-xterm {
   flex: 1 1 auto;
   min-height: 0;
   width: 100%;
@@ -42395,7 +42412,7 @@ body.hoststats-compact-docked .chat-input-bar {
    así ni la última fila ni la última columna quedan a medias. Forzar width/height:100% estiraba la rejilla
    más allá del múltiplo exacto → filas/columnas parciales. `terminal.js` mide el contenedor y fija cols/rows;
    xterm rendea exacto y el sobrante (hasta ~1 celda + el gutter de la barra) muestra el fondo #1e1e2e, limpio.
-   NO volver a poner `#term-xterm .xterm { width/height: 100% !important }`. */
+   NO volver a poner `.term-xterm .xterm { width/height: 100% !important }`. */
 
 /* El emulador NO puede HEREDAR métricas de texto del modal — y esto NO es cosmético, es la aritmética
    de la rejilla. `.modal-content` trae `letter-spacing: -0.015em` con `font-size: 14px`, o sea −0.21 px
@@ -42405,11 +42422,11 @@ body.hoststats-compact-docked .chat-input-bar {
    poniéndole a `.xterm-rows` un `letter-spacing: cellWidth − anchoMedido` INLINE — que SUSTITUYE al
    −0.21 px heredado en vez de sumarse. Resultado medido (2026-09-08, Chrome, caja de 738 px):
    `css.cell.width` = 8 px pero cada columna se PINTA a 8.21875 px; a 90 columnas son 739.7 px pintados
-   contra 720 px calculados → 19.7 px ≈ 2.4 celdas que el `overflow: hidden` de `#term-xterm` RECORTA por
+   contra 720 px calculados → 19.7 px ≈ 2.4 celdas que el `overflow: hidden` de `.term-xterm` RECORTA por
    la derecha (el bug de "se come el último par de caracteres").
    Neutralizándolo aquí, xterm mide y pinta con la MISMA métrica y el `letter-spacing` inline de las filas
    sale 0. Solo métricas de texto: NO se toca width/height (ver el bloque de arriba). */
-#term-xterm .xterm {
+.term-xterm .xterm {
   letter-spacing: normal;
   word-spacing: normal;
 }
@@ -42419,9 +42436,9 @@ body.hoststats-compact-docked .chat-input-bar {
    `scrollbar-gutter: stable` reserva su carril SIEMPRE, aparezca o no la barra: así el ancho útil del texto
    es CONSTANTE y `terminal.js` calcula las mismas cols en los dos estados. Sin esto la rejilla oscilaría
    (sin barra → cabe una columna más → aparece la barra → la última columna queda tapada).
-   Ese carril es TAMBIÉN el margen derecho visual del texto — por eso `#term-xterm` va con
+   Ese carril es TAMBIÉN el margen derecho visual del texto — por eso `.term-xterm` va con
    `padding-right: 0`: sumar padding + carril costaba ~1 celda de ancho útil. */
-#term-xterm .xterm-viewport {
+.term-xterm .xterm-viewport {
   overflow-y: auto !important;
   scrollbar-gutter: stable;
   background-color: transparent !important;  /* xterm.css la ponía #000; deja ver el theme */
@@ -42429,35 +42446,35 @@ body.hoststats-compact-docked .chat-input-bar {
   scrollbar-color: rgba(205, 214, 244, 0.28) transparent;
 }
 /* WebKit/Blink: barra fina, overlay, discreta; el track transparente. */
-#term-xterm .xterm-viewport::-webkit-scrollbar { width: 8px; height: 8px; }
-#term-xterm .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
-#term-xterm .xterm-viewport::-webkit-scrollbar-thumb {
+.term-xterm .xterm-viewport::-webkit-scrollbar { width: 8px; height: 8px; }
+.term-xterm .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
+.term-xterm .xterm-viewport::-webkit-scrollbar-thumb {
   background: rgba(205, 214, 244, 0.24);
   border-radius: 4px;
 }
-#term-xterm .xterm-viewport:hover::-webkit-scrollbar-thumb { background: rgba(205, 214, 244, 0.4); }
+.term-xterm .xterm-viewport:hover::-webkit-scrollbar-thumb { background: rgba(205, 214, 244, 0.4); }
 
 /* Alt-screen (vim/top/claude TUI): sin scrollback → jamás scrollbar, área limpia como en la TUI real.
    El gutter se CONSERVA (`stable`) a propósito: si se quitara, el ancho útil cambiaría al entrar/salir de la
    alt-screen y la rejilla se recalcularía a media sesión de vim. */
-#term-xterm.term-alt-screen .xterm-viewport {
+.term-xterm.term-alt-screen .xterm-viewport {
   overflow-y: hidden !important;
   scrollbar-width: none;
 }
-#term-xterm.term-alt-screen .xterm-viewport::-webkit-scrollbar { display: none; }
+.term-xterm.term-alt-screen .xterm-viewport::-webkit-scrollbar { display: none; }
 
 /* Modo one-shot degradado: se comporta como el layout anterior (columna con <pre> + fila de input). */
-#term-oneshot.term-oneshot {
+.term-oneshot {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
 }
-#term-oneshot .term-output { flex: 1 1 auto; overflow: auto; min-height: 0; }
+.term-oneshot .term-output { flex: 1 1 auto; overflow: auto; min-height: 0; }
 
 /* Utilidad: respeta el hidden aunque el contenedor sea flex. */
-#term-xterm.hidden,
-#term-oneshot.hidden { display: none !important; }
+.term-xterm.hidden,
+.term-oneshot.hidden { display: none !important; }
 
 /* Ícono PROPIO de Cortex (assets/icon-small.svg del repo cortex). Va como <img> y no inline porque
    trae sus propios gradientes y colores de marca: no es un glifo monocromo que deba heredar

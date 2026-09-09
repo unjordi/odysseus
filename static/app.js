@@ -779,6 +779,21 @@ function initializeEventListeners() {
         if (m) { dismissModal(m); return; }
       }
 
+      // Terminales: hay N (#29a), así que no se pueden listar por id. La que cierra ESC es la de ARRIBA —
+      // el mayor z-index entre las visibles, que es la que el usuario está viendo/usando; a igual z gana la
+      // última del documento. Va antes del mapa por-id porque ese mapa aún nombra `term-modal` (la primera)
+      // y cerraría la instancia equivocada cuando hay varias.
+      {
+        const terms = Array.from(document.querySelectorAll('.term-modal'))
+          .filter((m) => !m.classList.contains('hidden') && !m.classList.contains('modal-minimized'));
+        if (terms.length) {
+          const z = (m) => parseInt(getComputedStyle(m).zIndex, 10) || 0;
+          const top = terms.reduce((a, b) => (z(b) >= z(a) ? b : a));
+          dismissModal(top);
+          return;
+        }
+      }
+
       for (const modalId of Object.keys(modalItemMap)) {
         const modal = el(modalId);
         if (modal && !modal.classList.contains('hidden')) {
@@ -1719,12 +1734,18 @@ function initializeEventListeners() {
       terminalModule.open();
     });
   }
-  const closeTermBtn = el('close-term-modal');
-  if (closeTermBtn && termModal) {
-    closeTermBtn.addEventListener('click', () => {
-      dismissModal(termModal);
-    });
-  }
+  // Cierre DELEGADO: las terminales son N (#29a) y las que no son la primera nacen DESPUÉS de este wiring
+  // (son clones que `terminal.js` crea al vuelo), así que engancharle un listener a `#close-term-modal` solo
+  // cubriría a la primera. Un listener en el documento cubre a todas, presentes y futuras, y sigue cerrando
+  // por `dismissModal` — la misma animación y el mismo camino que cualquier otro modal.
+  // OJO: cerrar OCULTA la ventana y deja el PTY VIVO (comportamiento de siempre); reabrir te devuelve tu
+  // sesión. La destrucción real es `terminalModule.destroy(id)`.
+  document.addEventListener('click', (e) => {
+    const btn = e.target && e.target.closest ? e.target.closest('.term-modal .close-btn') : null;
+    if (!btn) return;
+    const modal = btn.closest('.term-modal');
+    if (modal) dismissModal(modal);
+  });
 
   const addMemBtn = el('add-memory-btn');
   if (addMemBtn) {

@@ -18,7 +18,7 @@
  * cols/rows que CABEN en el área realmente visible del contenedor del emulador.
  *
  * Contrato de las medidas (todas en px CSS, tal cual las da el DOM):
- *  - `boxWidth`/`boxHeight`  = `clientWidth`/`clientHeight` del contenedor (#term-xterm). Esa caja ya
+ *  - `boxWidth`/`boxHeight`  = `clientWidth`/`clientHeight` del contenedor (`.term-xterm`). Esa caja ya
  *    EXCLUYE bordes y cualquier scrollbar propia, e INCLUYE el padding → por eso el padding se resta aquí.
  *  - `padLeft/Right/Top/Bottom` = padding computado del MISMO contenedor.
  *  - `scrollbarWidth` = ancho REAL que la scrollbar del `.xterm-viewport` le quita al área de texto
