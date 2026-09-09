@@ -331,3 +331,57 @@ def test_la_muletilla_entre_pausas_sigue_borrandose():
     assert _acepta("y, bueno, seguimos", "y, seguimos")
     assert _acepta("va, entonces lo dejamos", "entonces lo dejamos")
     assert _acepta("bueno, ya está", "ya está")   # el inicio del texto cuenta como pausa
+
+
+# ── BAJO de la auditoría: el breaker contaba lo BIEN-ENVUELTO, no lo útil ───────
+# Bastaba con que la respuesta trajera los delimitadores para reiniciar el
+# contador, así que un modelo que contesta bien formado pero cuya salida se
+# rechaza SIEMPRE mantenía el breaker abierto: se pagaba la latencia de cada
+# llamada sin obtener nunca una limpieza.
+
+def _responde(monkeypatch, contenido):
+    """Sustituye el POST a ollama por una respuesta fija, sin tocar la red."""
+    import json as _json
+    from services.stt import transcript_cleaner as tc
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return _json.dumps({"message": {"content": contenido}}).encode("utf-8")
+
+    monkeypatch.setattr(tc.urllib.request, "urlopen", lambda *a, **k: _Resp())
+
+
+def test_una_respuesta_rechazada_cuenta_como_fallo_del_breaker(monkeypatch):
+    from services.stt import transcript_cleaner as tc
+    tc.reset_llm_circuit()
+    # bien formada (trae los delimitadores) pero REFORMULA: se rechaza
+    _responde(monkeypatch, "<limpio>otra cosa totalmente distinta</limpio>")
+    for _ in range(tc._LLM_FAILURE_LIMIT):
+        salida, motivo = tc.clean_with_llm("necesito el commit", model="x")
+        assert salida is None and motivo.startswith("rechazada")
+    assert not tc._llm_available(), "N rechazos seguidos deben PAUSAR el LLM"
+    tc.reset_llm_circuit()
+
+
+def test_una_respuesta_ACEPTADA_sigue_reiniciando_el_contador(monkeypatch):
+    from services.stt import transcript_cleaner as tc
+    tc.reset_llm_circuit()
+    tc._note_llm_failure("probe")
+    _responde(monkeypatch, "<limpio>necesito el commit</limpio>")
+    salida, motivo = tc.clean_with_llm("eh necesito el commit", model="x")
+    assert motivo == "ok" and salida == "necesito el commit"
+    assert tc._llm_consecutive_failures == 0
+    tc.reset_llm_circuit()
+
+
+def test_los_puntos_suspensivos_cuentan_como_pausa():
+    """El `\x00` del conjunto de pausas era código muerto (lo fabrica y lo borra
+    el carril determinista); el carácter real de suspensivos sí llega y sí es
+    una pausa."""
+    assert _acepta("y… bueno… seguimos", "y… seguimos")
