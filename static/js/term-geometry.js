@@ -258,10 +258,10 @@ export function createPtySizeReconciler(io) {
  * recibiendo la composición para que `compositionend` entregue la vocal completa. Solo se corta la
  * PROPAGACIÓN hacia el listener de xterm.
  *
- * @param {{ isComposing?: boolean, inputType?: string } | null | undefined} ev evento `input`/`beforeinput`.
+ * @param {{ isComposing?: boolean } | null | undefined} ev evento `input`/`beforeinput`.
  * @returns {boolean} true = no dejar que llegue a xterm.
  */
 export function shouldSuppressInputEvent(ev) {
   if (!ev) return false;
-  return ev.isComposing === true || ev.inputType === "insertCompositionText";
+  return ev.isComposing === true;
 }
