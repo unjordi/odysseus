@@ -54,12 +54,13 @@ const MUTACIONES = {
   1: ["k.gui === 'lee' ?", 'false ?'],                       // se cae el candado de los knobs de solo lectura
   2: ['Vista de SOLO LECTURA', 'Vista'],                     // se cae el aviso de solo lectura
   3: ['`${fmtInt(tk.chars)} chars`', 'String(tk.chars)'],    // el token deja de reportarse por longitud
+  4: ["_broker.reason === 'sin-vista-del-host'", 'false'],   // sin-vista deja de degradar con gracia
 };
 
 function cargarWidget() {
   let src = readFileSync('static/js/cortexWidget.js', 'utf8').replace(
     'export default { open, close, toggle };',
-    'export { renderBrokerTab, knobRowHtml, _broker, _brokerKnobs, ENDPOINTS };',
+    'export { renderBrokerTab, sondeoPanelHtml, refreshBroker, knobRowHtml, _broker, _brokerKnobs, ENDPOINTS };',
   );
   const ctrl = Number(process.env.BROKER_TAB_CONTROL || 0);
   if (ctrl) {
@@ -77,6 +78,14 @@ function cargarWidget() {
 
 const FIX = JSON.parse(readFileSync('tests/broker_tab_fixture.json', 'utf8'));
 const W = await cargarWidget();
+
+// Simula UNA respuesta del endpoint /api/cortex/broker conduciendo el fetch real del módulo, para
+// ejercer refreshBroker() de punta a punta (incluida la captura del sondeo, que viaja en la raíz).
+async function conRespuesta(envelope) {
+  const prev = globalThis.fetch;
+  globalThis.fetch = async () => ({ status: 200, ok: true, json: async () => envelope });
+  try { await W.refreshBroker(); } finally { globalThis.fetch = prev; }
+}
 
 function conDatos() {
   W._broker.status = 'ok'; W._broker.data = FIX.scan; W._broker.message = '';
@@ -150,6 +159,33 @@ test('el endpoint que consume es de solo lectura (list), nunca set/unset', () =>
   assert.equal(W.ENDPOINTS.broker, '/api/cortex/broker?knobs=1');
   const src = readFileSync('static/js/cortexWidget.js', 'utf8');
   assert.equal(/broker-knobs\.sh['"\s+]*(set|unset)/.test(src), false);
+});
+
+test('el sondeo del broker se muestra siempre, arriba de todo', () => {
+  assert.match(W.sondeoPanelHtml({ mode: 'host', configured: true, reachable: true }), /responde/);
+  assert.match(W.sondeoPanelHtml({ mode: 'container', configured: false }), /local del contenedor/);
+  assert.match(W.sondeoPanelHtml({ mode: 'host-down', configured: true, detail: 'ECONNREFUSED' }), /NO responde.*ECONNREFUSED/);
+  assert.equal(W.sondeoPanelHtml(null), '');
+});
+
+test('sin vista del host (axon contenerizado) NO es una caja de error: explica y conserva el sondeo', async () => {
+  await conRespuesta({
+    ok: false, reason: 'sin-vista-del-host', detail: 'axon no ve la sesión de usuario del host',
+    knobs: { ok: false, reason: 'sin-vista-del-host', detail: 'idem' },
+    sondeo: { mode: 'host', configured: true, reachable: true },
+  });
+  const html = W.renderBrokerTab();
+  assert.match(html, /responde/);                    // el sondeo sobrevive
+  assert.match(html, /widget de escritorio/);        // se explica dónde SÍ se ve el detalle
+  assert.doesNotMatch(html, /SIN DATOS/);            // y NO la caja de error cruda
+});
+
+test('con vista del host se pinta el estado detallado completo, y el sondeo arriba', async () => {
+  await conRespuesta({ ok: true, data: FIX.scan, knobs: { ok: true, data: FIX.knobs }, sondeo: { mode: 'host', configured: true, reachable: true } });
+  const html = W.renderBrokerTab();
+  assert.match(html, /responde/);
+  assert.ok(html.includes(FIX.scan.endpoint.socket));   // el detalle completo, como antes
+  assert.ok(html.includes('AXON_TERM_BROKER_PORT'));
 });
 
 // El fixture no puede quedarse viejo en silencio: donde los helpers de cortex existen (la máquina del
