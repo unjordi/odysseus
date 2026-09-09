@@ -45,6 +45,9 @@ def test_defaults_preserve_todays_transcribe_call():
     assert kwargs["vad_parameters"] == {
         "min_silence_duration_ms": 300,
         "speech_pad_ms": 400,
+        # Descarta clics/respiraciones antes del decoder: con el default 0 de
+        # faster-whisper, un blip de 40 ms se decodifica como "¡Gracias!".
+        "min_speech_duration_ms": 250,
     }
     assert kwargs["initial_prompt"] == DEFAULT_STT_INITIAL_PROMPT
     # No threshold unless configured: the library default (0.5) applies.
@@ -150,6 +153,7 @@ def test_settings_reach_faster_whisper():
     assert kwargs["vad_parameters"] == {
         "min_silence_duration_ms": 500,
         "speech_pad_ms": 200,
+        "min_speech_duration_ms": 250,   # no configurado -> default
         "threshold": 0.35,
     }
 
@@ -181,6 +185,7 @@ def test_nonsense_vad_durations_fall_back_to_defaults():
     assert kwargs["vad_parameters"] == {
         "min_silence_duration_ms": 300,
         "speech_pad_ms": 400,
+        "min_speech_duration_ms": 250,
     }
 
 

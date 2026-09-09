@@ -57,11 +57,35 @@ DEFAULT_STT_LANGUAGE = "es"
 # Términos frecuentes en ladrillera." — the prefix continued and fused with the
 # audio. A comma-separated glossary still biases the vocabulary (which is the
 # only reason to send a prompt at all) but offers no sentence to complete, so
-# it keeps the benefit without the failure mode. Keep it a list: any prose
-# added here brings the echo back.
+# it keeps the benefit without the failure mode.
+#
+# ── Por qué ahora lleva la etiqueta "Technical terms:" ──
+#
+# El ENVOLTORIO de la lista no es cosmético, es la parte con más ganancia medida.
+# Un barrido de 184 transcripciones (Qwen3-ASR-1.7B) comparó formatos: sin
+# contexto 35.2% WER, lista PELADA 33.8%, y la MISMA lista envuelta en
+# "Technical terms: …" 18.2% (recall de términos 57% → 65% → 79%). En el clip más
+# difícil la lista pelada salió PEOR que no poner nada (87.5% vs 78.1%) y el
+# envoltorio la bajó a 28.1%. De ocho envoltorios probados sólo pasaron tres:
+# "Technical terms:", "Vocabulary:" y "Proper nouns:" — "Keywords:", "Glossary:"
+# y "Context:" FALLARON. [MEDIDO]
+#
+# Tres salvedades, porque esto convive con el echo de arriba:
+#  1. Se midió sobre Qwen3-ASR, NO sobre Whisper → la transferencia es [INFERIDO].
+#  2. Es una ETIQUETA con dos puntos, no una oración. Eso es justo lo que la
+#     distingue de la prosa que causó el echo del 2026-09-06: "Términos
+#     frecuentes en español de México." es una frase que el decoder puede
+#     continuar; "Technical terms:" no ofrece oración que completar. Aun así el
+#     riesgo NO es cero y NO se ha re-medido en vivo → pendiente de QA dictando.
+#     La red debajo sigue puesta: filter_degenerate_text detecta el prompt-echo.
+#  3. La evidencia sobre initial_prompt en Whisper está genuinamente PARTIDA (un
+#     estudio mide −17% relativo de WER, otro lo mide PEOR que sin prompt).
+#
+# → Trátalo como EXPERIMENTO desactivable, no como verdad asentada: se apaga
+#   poniendo `stt_initial_prompt: ""` en settings, sin tocar código.
 DEFAULT_STT_INITIAL_PROMPT = (
-    "Whisper, cuantización, MCP, endpoint, VRAM, faster-whisper, ctranslate2, "
-    "push-to-talk, latencia, commit, deploy, backend, axon, Odysseus."
+    "Technical terms: Whisper, cuantización, MCP, endpoint, VRAM, faster-whisper, "
+    "ctranslate2, push-to-talk, latencia, commit, deploy, backend, axon, Odysseus."
 )
 
 # Data file paths

@@ -98,14 +98,29 @@ DEFAULT_SETTINGS = {
     "stt_vad_filter": True,
     "stt_vad_min_silence_ms": 300,
     "stt_vad_speech_pad_ms": 400,
+    # Descarta chunks de "voz" más cortos que esto (clics, respiraciones, un
+    # golpe de mesa). El default de faster-whisper es 0, o sea que un blip de
+    # 40 ms llega al decoder y se convierte en la despedida de subtítulos.
+    "stt_vad_min_speech_ms": 150,
     # Silero speech-probability threshold; "" = library default (0.5). Lower it
     # (e.g. 0.35) if a quiet mic gets real speech filtered out entirely.
     "stt_vad_threshold": "",
-    # Whisper's own silence detector. A segment it flags above this probability
-    # (and below the log-prob floor) is skipped instead of being decoded into
-    # "¡Gracias por ver el video!" — the hallucination it learned from subtitle
-    # corpora and emits when there is nothing to transcribe.
+    # Umbral de no-habla del propio Whisper. OJO: NO es lo que evita el
+    # "¡Gracias!" — para marcar un segmento como silencio exige que este umbral
+    # se supere Y que el decoding falle por log-prob a la vez, y una alucinación
+    # corta y confiada pasa las dos (faster-whisper#621). Lo que sí lo evita es
+    # el VAD + la bag-of-hallucinations. Se deja en el default del paper.
     "stt_no_speech_threshold": 0.6,
+    # ── Limpieza del dictado (post-proceso) ──
+    # Determinista: quita muletillas y "..." de pausa. Barato y sin red.
+    "stt_clean_enabled": True,
+    # Pasada opcional con un LLM local (ollama). APAGADA por default: medido el
+    # 2026-09-08 en esta máquina, qwen3:4b corrió a 9.5 tokens/s (CPU-offloaded
+    # por un 27b residente) → entre 4.5 s y 26 s por clip. El dictado es
+    # interactivo; con la GPU libre se puede prender.
+    "stt_clean_llm_enabled": False,
+    "stt_clean_llm_model": "qwen3:4b",
+    "stt_clean_llm_timeout_ms": 2500,
     "search_provider": "searxng",
     # Default fallback chain — when the primary provider fails or
     # rate-limits, we try DuckDuckGo next. Free, no API key required, so
