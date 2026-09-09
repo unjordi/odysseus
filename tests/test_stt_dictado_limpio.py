@@ -248,3 +248,65 @@ def test_se_descarta_la_fuga_de_razonamiento_del_modelo():
 def test_se_descarta_un_razonamiento_sin_cierre():
     """num_predict puede cortar antes de la etiqueta de cierre."""
     assert strip_reasoning("Hola <think>y aquí se cortó...") == "Hola"
+
+
+# ── A-4: las palabras AMBIGUAS no se borran sin contexto ────────────────────────
+# El conjunto plano `_REMOVABLE` autorizaba a borrar `o`, `va`, `como`, `verdad`…
+# donde eran CONTENIDO, y los dos candados salían verdes porque la palabra estaba
+# en la lista. Ahora una ambigua sólo cuenta como relleno si venía DELIMITADA por
+# una pausa — el mismo criterio que el carril determinista ya usaba para `este`.
+
+def _acepta(src: str, cand: str) -> bool:
+    from services.stt.transcript_cleaner import (
+        is_deletion_only, _removals_are_all_fillers,
+    )
+    return is_deletion_only(src, cand) and _removals_are_all_fillers(src, cand)
+
+
+def test_no_se_borra_una_ambigua_que_es_contenido():
+    assert not _acepta("borra el archivo viejo o el nuevo", "borra el archivo viejo el nuevo")
+    assert not _acepta("si el build va bien", "si el build bien")
+    assert not _acepta("es como el otro", "es el otro")
+    assert not _acepta("dime la verdad completa", "dime la completa")
+    assert not _acepta("dame el uno o el dos", "dame el uno el dos")
+
+
+def test_si_se_borra_una_ambigua_delimitada_por_pausa():
+    assert _acepta("bueno, entonces lo hacemos", "entonces lo hacemos")
+    assert _acepta("este, revisa el worktree", "revisa el worktree")
+
+
+def test_la_muletilla_multipalabra_sigue_siendo_borrable():
+    """La pausa cierra la RACHA, no cada palabra: en `o sea,` el `o` no lleva
+    coma detrás, pero la racha de ambiguas termina delimitada."""
+    assert _acepta("o sea, lo que quiero decir", "lo que quiero decir")
+
+
+def test_lo_inequivoco_no_necesita_contexto():
+    assert _acepta("eh necesito el commit", "necesito el commit")
+
+
+def test_siguen_frenados_el_verbo_comido_y_pasa_el_tartamudeo():
+    assert not _acepta("necesito revisar el worktree", "revisar el worktree")
+    assert _acepta("el el commit", "el commit")
+
+
+# ── M-6: el breaker vuelve a media asta al vencer el cooldown ───────────────────
+# El contador no se reiniciaba, así que el PRIMER fallo tras el cooldown re-pausaba
+# (el límite dejaba de significar lo que dice) y el log informaba rachas inventadas.
+
+def test_el_breaker_exige_otra_racha_completa_tras_el_cooldown():
+    from services.stt import transcript_cleaner as tc
+    tc.reset_llm_circuit()
+    tc._note_llm_failure("probe")
+    tc._note_llm_failure("probe")          # alcanza el límite ⇒ pausa
+    assert not tc._llm_available()
+    import time as _t
+    tc._llm_disabled_until = _t.monotonic() - 1   # el cooldown VENCIÓ (en el pasado, no "nunca hubo")
+    assert tc._llm_available()
+    assert tc._llm_consecutive_failures == 0
+    tc._note_llm_failure("probe")          # UN solo fallo NO debe re-pausar
+    assert tc._llm_available()
+    tc._note_llm_failure("probe")          # el segundo sí
+    assert not tc._llm_available()
+    tc.reset_llm_circuit()
