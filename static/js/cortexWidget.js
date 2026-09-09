@@ -640,16 +640,6 @@ function renderCerebroTab() {
 // de ESCRITORIO, que corre como el usuario dueño del .env. Es el mismo límite que esta página ya
 // declara para el self-heal/self-update del cerebro.
 
-// Orden y títulos 1:1 con `brokerGrupos`/`brokerGrupoTitulo` del QML (main.qml): las dos caras salen
-// del MISMO spec (src/widget-spec/broker-knobs.tsv), así que tampoco su lectura debe divergir.
-const BROKER_GRUPOS = [
-  ['endpoint', 'Endpoint y contrato con el cliente'],
-  ['topes', 'Topes de concurrencia'],
-  ['websocket', 'WebSocket: contrapresión y keepalive'],
-  ['http', 'Topes del HTTP'],
-  ['proceso', 'Proceso'],
-];
-
 function fmtBytes(n) {
   if (typeof n !== 'number' || !isFinite(n) || n <= 0) return '—';
   const u = ['B', 'KB', 'MB', 'GB'];
@@ -752,7 +742,13 @@ function renderBrokerTab() {
   if (_brokerKnobs.status === 'ok' && _brokerKnobs.data && Array.isArray(_brokerKnobs.data.knobs)) {
     const knobs = _brokerKnobs.data.knobs;
     html += `<div class="hs-section-label">[ KNOBS · ${esc(_brokerKnobs.data.archivo || '')} ]</div>`;
-    for (const [grupo, titulo] of BROKER_GRUPOS) {
+    // El orden + títulos de grupo salen del spec de cortex, emitidos en `grupos` (#148): una sola fuente,
+    // ni el QML ni esta cara los hardcodean. Fallback (broker viejo sin `grupos`): los grupos que traen
+    // los propios knobs, sin título bonito — que no se quede la lista en blanco contra un backend atrás.
+    const grupos = Array.isArray(_brokerKnobs.data.grupos) && _brokerKnobs.data.grupos.length
+      ? _brokerKnobs.data.grupos.map((g) => [g.clave, g.titulo])
+      : [...new Set(knobs.map((k) => k && k.grupo).filter(Boolean))].map((g) => [g, g]);
+    for (const [grupo, titulo] of grupos) {
       const del = knobs.filter((k) => k && k.grupo === grupo);
       if (!del.length) continue;
       html += `<div class="cortex-knob-group">${esc(titulo)}</div>`;
