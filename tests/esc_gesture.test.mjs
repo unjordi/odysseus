@@ -227,3 +227,64 @@ test('tap y hold se pueden alternar en gestos sucesivos', () => {
   assert.equal(f.holds.length, 1, `holds: ${f.holds.length}`);
   assert.equal(a.estado().holdDisparado, false, 'el flag del hold no se limpió en el gesto siguiente');
 });
+
+// ── Casos que nacieron de la 6ª tupla auditora (2026-09-09) ──────────────────
+
+test('R-4 · un temporizador HUÉRFANO no dispara alHold después del gesto', () => {
+  // Un mundo cuyo `cancelar` NO cancela: pasa si el inyectado falta, si devuelve
+  // un handle inservible, o simplemente si el temporizador ya estaba en vuelo.
+  // Sin la guarda de generación, alHold se llamaba cuando el usuario ya había
+  // soltado la tecla — cerrando algo que nadie pidió cerrar.
+  const f = mundoFalso({ cancelar() { /* no cancela nada */ } });
+  const a = crearArbitroEsc(f.mundo);
+  a.keydown(ESC);
+  f.avanzar(100);
+  a.keyup(ESC);                       // gesto terminado: fue un tap
+  f.avanzar(MS_HOLD_POR_DEFECTO);     // y AHORA se cumple el temporizador viejo
+  assert.deepEqual(f.holds, [], 'un temporizador huérfano disparó alHold tras el keyup');
+  assert.equal(f.taps.length, 1, 'el tap no se disparó, o se disparó dos veces');
+});
+
+test('R-4 · cancelar() invalida el temporizador aunque el mundo no lo cancele', () => {
+  const f = mundoFalso({ cancelar() { /* no cancela nada */ } });
+  const a = crearArbitroEsc(f.mundo);
+  a.keydown(ESC);
+  f.avanzar(200);
+  a.cancelar();
+  f.avanzar(MS_HOLD_POR_DEFECTO);
+  assert.deepEqual(f.holds, [], 'el temporizador cancelado disparó igual: la cancelación dependía del mundo');
+});
+
+test('R-4 · el temporizador de un gesto VIEJO no dispara sobre el gesto nuevo', () => {
+  const f = mundoFalso({ cancelar() {} });
+  const a = crearArbitroEsc(f.mundo);
+  a.keydown(ESC);                     // gesto 1
+  f.avanzar(100);
+  a.keyup(ESC);                       // termina como tap, su temporizador sigue en vuelo
+  a.keydown(ESC);                     // gesto 2, arranca su propio temporizador
+  f.avanzar(MS_HOLD_POR_DEFECTO);     // vencen los DOS
+  assert.equal(f.holds.length, 1,
+    `el temporizador viejo se sumó al nuevo: ${f.holds.length} holds`);
+});
+
+test('R-5 · un `programar` que LANZA no rompe el keydown', () => {
+  // programar es IO inyectado: puede lanzar. Fuera de un try, su excepción salía
+  // por el keydown de un módulo declarado never-throws.
+  const f = mundoFalso({ programar() { throw new Error('el temporizador explotó'); } });
+  const a = crearArbitroEsc(f.mundo);
+  assert.doesNotThrow(() => a.keydown(ESC), 'el keydown propagó la excepción de programar');
+  // Y el gesto degrada a tap, que es lo razonable: no hay temporizador que cumplir.
+  assert.equal(a.keyup(ESC), true);
+  assert.equal(f.taps.length, 1, 'tras fallar el temporizador, el tap no llegó');
+  assert.equal(a.estado().abajo, false, 'el árbitro quedó atorado tras la excepción');
+});
+
+test('R-5 · un `cancelar` que LANZA no rompe el keyup ni el cancelar', () => {
+  const f = mundoFalso({ cancelar() { throw new Error('clearTimeout explotó'); } });
+  const a = crearArbitroEsc(f.mundo);
+  a.keydown(ESC);
+  assert.doesNotThrow(() => a.keyup(ESC), 'el keyup propagó la excepción de cancelar');
+  a.keydown(ESC);
+  assert.doesNotThrow(() => a.cancelar(), 'cancelar() propagó la excepción de cancelar');
+  assert.equal(a.estado().abajo, false);
+});

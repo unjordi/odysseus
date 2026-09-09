@@ -97,20 +97,62 @@ export function calcular(estado, slot, area, rectActual) {
     pasoNuevo = 0;
   }
 
+  // R-3 (auditoría 6ª): `rectActual` viene de fuera y puede ser `null` — este módulo
+  // promete NEVER-THROWS y antes lo rompía en dos sitios: `{ ...null }` daba `{}` (una
+  // geometría libre BASURA que `restore` habría devuelto al caller con los campos en
+  // `undefined`) y `rectActual.width` en `center` LANZABA un TypeError.
+  const rectActualUsable =
+    rectActual !== null &&
+    typeof rectActual === 'object' &&
+    Number.isFinite(rectActual.left) &&
+    Number.isFinite(rectActual.top) &&
+    Number.isFinite(rectActual.width) &&
+    Number.isFinite(rectActual.height) &&
+    rectActual.width > 0 &&
+    rectActual.height > 0;
+
   // Guardar la geometría libre si pasamos de libre a enmosaicado.
   let libreNuevo = estado.libre;
   if (estado.slot === null && slot !== 'restore') {
-    // Primera vez que se enmosaica: guardar rectActual.
-    libreNuevo = { ...rectActual };
+    // Primera vez que se enmosaica: guardar rectActual. Si no es usable se guarda
+    // `null` — "no sé de dónde venía" —, que es lo honesto: `restore` entonces no
+    // hace nada en vez de mandar la ventana a una geometría inventada.
+    libreNuevo = rectActualUsable ? { ...rectActual } : null;
+  }
+
+  // R-1 (auditoría 6ª): el área se NORMALIZA a enteros AQUÍ, en la frontera, porque
+  // viene de una medición del DOM y `getBoundingClientRect` devuelve FLOTANTES de
+  // rutina (1280.5). Antes solo se redondeaba la primera parte de la partición y la
+  // segunda salía como el resto (`1280.5 - 640 = 640.5`), así que el módulo prometía
+  // enteros y entregaba decimales en el caso NORMAL, no en un borde raro. Se usa
+  // `floor` en las medidas para no exceder nunca lo que se midió, y `round` en el
+  // origen. A partir de aquí toda la aritmética es entera por construcción.
+  area = {
+    left: Math.round(area.left),
+    top: Math.round(area.top),
+    width: Math.floor(area.width),
+    height: Math.floor(area.height),
+  };
+  // Un área de 0.4 px de ancho existía antes del floor y ya no: revalidar.
+  if (area.width <= 0 || area.height <= 0) {
+    return { rect: null, estado: { ...estado } };
   }
 
   // Calcular el rectángulo destino según el slot.
   let rect = null;
 
   if (slot === 'restore') {
-    // Restaurar a la geometría guardada, o no hacer nada si no hay.
+    // R-6 (auditoría 6ª): si no hay nada que restaurar, el estado se devuelve INTACTO.
+    // Antes se limpiaba igual, así que un `restore` que no movió nada le borraba al
+    // caller el slot y el paso del ciclo: el siguiente atajo arrancaba desde ½ sin que
+    // nada hubiera pasado en pantalla. (El probe no lo cazaba porque solo lo probaba
+    // desde el estado inicial, donde limpiar es un no-op — un test que pasa por
+    // coincidencia.)
+    if (estado.libre === null) {
+      return { rect: null, estado: { ...estado } };
+    }
     rect = estado.libre;
-    // Limpiar el estado: volver a libre.
+    // Restaurado: la ventana vuelve a estar libre.
     return {
       rect,
       estado: { slot: null, paso: 0, libre: null },
@@ -122,8 +164,8 @@ export function calcular(estado, slot, area, rectActual) {
     rect = { ...area };
   } else if (slot === 'center') {
     // Centrar con el tamaño actual, o 60% del área si no es usable.
-    let w = rectActual.width;
-    let h = rectActual.height;
+    let w = rectActualUsable ? rectActual.width : NaN;
+    let h = rectActualUsable ? rectActual.height : NaN;
 
     // Si el tamaño actual no es usable, usar 60% del área.
     if (!Number.isFinite(w) || w <= 0 || !Number.isFinite(h) || h <= 0) {
@@ -154,11 +196,19 @@ export function calcular(estado, slot, area, rectActual) {
         height: area.height,
       };
     } else {
-      // right
+      // right — R-2 (auditoría 6ª): la fracción es el tamaño de LA VENTANA que se
+      // pidió, no el punto de corte. Antes `right` recibía `w2`, o sea el
+      // COMPLEMENTO: el ciclo daba ½ → ⅓ → ⅔ mientras `left` daba ½ → ⅔ → ⅓, así
+      // que apretar dos veces "derecha" ENCOGÍA la ventana y dos veces "izquierda"
+      // la agrandaba. Es lo primero que un usuario de Rectangle nota.
+      // El corte se calcula con la fracción COMPLEMENTARIA y la ventana se lleva el
+      // resto: así se conserva la otra invariante —que `left(f)` y `right(1-f)`
+      // embaldosan el área EXACTAMENTE, sin el píxel de hueco ni el de traslape.
+      const corte = Math.round(area.width * (1 - fraccion));
       rect = {
-        left: area.left + w1,
+        left: area.left + corte,
         top: area.top,
-        width: w2,
+        width: area.width - corte,
         height: area.height,
       };
     }
@@ -176,12 +226,14 @@ export function calcular(estado, slot, area, rectActual) {
         height: h1,
       };
     } else {
-      // bottom
+      // bottom — R-2 (auditoría 6ª), el mismo defecto que `right` en el otro eje:
+      // la fracción es el alto de LA VENTANA pedida, no el punto de corte.
+      const corte = Math.round(area.height * (1 - fraccion));
       rect = {
         left: area.left,
-        top: area.top + h1,
+        top: area.top + corte,
         width: area.width,
-        height: h2,
+        height: area.height - corte,
       };
     }
   } else if (slot === 'top-left' || slot === 'top-right' || slot === 'bottom-left' || slot === 'bottom-right') {

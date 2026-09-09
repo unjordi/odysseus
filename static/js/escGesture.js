@@ -81,6 +81,9 @@ export function crearArbitroEsc(mundo) {
   const msHold = validarMsHold(mundo && mundo.msHold);
   let abajo = false;
   let holdDisparado = false;
+  // Identifica el gesto en curso. Un temporizador guarda la generación con la que
+  // se programó y solo dispara si sigue siendo la vigente (ver R-4 abajo).
+  let generacion = 0;
   let handle = null;
 
   // Regla 7: mundo puede llegar null/undefined o sin alguna función. Se
@@ -118,14 +121,35 @@ export function crearArbitroEsc(mundo) {
     abajo = true;
     holdDisparado = false;
     if (programar) {
-      handle = programar(function () {
-        // El temporizador se cumplió: esto fue un hold. Se marca el gesto
-        // ANTES de llamar al callback, para que el keyup posterior no dispare
-        // además un tap (regla 2).
-        holdDisparado = true;
+      // R-5 (auditoría 6ª): `programar` es IO INYECTADO, o sea código de otro
+      // módulo, y puede LANZAR. Fuera de un try, su excepción salía por el
+      // `keydown` de un módulo declarado never-throws — y justo por el camino
+      // más caliente que tiene. Si falla, el gesto degrada a tap (no hay
+      // temporizador que cumplir) en vez de tumbar al caller.
+      const gesto = ++generacion;
+      try {
+        handle = programar(function () {
+          // R-4 (auditoría 6ª): antes de disparar, el temporizador COMPRUEBA que el
+          // gesto que lo programó siga vivo. Sin esta guarda, un temporizador
+          // huérfano —porque el `cancelar` inyectado faltaba o no cancela de verdad—
+          // llamaba a `alHold` después de que el usuario ya soltó la tecla o cambió
+          // de ventana: cerraría algo que nadie pidió cerrar, que es exactamente el
+          // daño que este módulo existe para evitar. Se compara la GENERACIÓN, no un
+          // booleano, para que un temporizador de un gesto anterior no pueda pasar
+          // por el de ahora.
+          if (gesto !== generacion || !abajo || holdDisparado) {
+            return;
+          }
+          // El temporizador se cumplió: esto fue un hold. Se marca el gesto
+          // ANTES de llamar al callback, para que el keyup posterior no dispare
+          // además un tap (regla 2).
+          holdDisparado = true;
+          handle = null;
+          llamarSeguro(alHold);
+        }, msHold);
+      } catch (e) {
         handle = null;
-        llamarSeguro(alHold);
-      }, msHold);
+      }
     }
     return true;
   }
@@ -154,8 +178,19 @@ export function crearArbitroEsc(mundo) {
     const fueHold = holdDisparado;
     abajo = false;
     holdDisparado = false;
-    if (handle !== null && cancelarHandle) {
-      cancelarHandle(handle);
+    // R-4 (auditoría 6ª): se INVALIDA la generación además de cancelar el handle. El
+    // `cancelar` inyectado puede faltar, devolver un handle `undefined` o no cancelar
+    // de verdad, y entonces el temporizador se cumpliría igual y llamaría a `alHold`
+    // cuando el gesto ya terminó — cerrando algo que nadie pidió cerrar. Con la
+    // generación subida, al cumplirse ya no será el vigente y se irá sin llamar a
+    // nadie: la cancelación deja de depender del mundo de fuera.
+    generacion++;
+    if (handle !== null && handle !== undefined && cancelarHandle) {
+      try {
+        cancelarHandle(handle);
+      } catch (e) {
+        // `cancelar` es IO inyectado y puede lanzar; la generación ya nos protege.
+      }
       handle = null;
     }
     // Regla 2: un hold que ya disparó NO dispara además un tap al soltar. Si
@@ -177,8 +212,19 @@ export function crearArbitroEsc(mundo) {
     // curso).
     abajo = false;
     holdDisparado = false;
-    if (handle !== null && cancelarHandle) {
-      cancelarHandle(handle);
+    // R-4 (auditoría 6ª): se INVALIDA la generación además de cancelar el handle. El
+    // `cancelar` inyectado puede faltar, devolver un handle `undefined` o no cancelar
+    // de verdad, y entonces el temporizador se cumpliría igual y llamaría a `alHold`
+    // cuando el gesto ya terminó — cerrando algo que nadie pidió cerrar. Con la
+    // generación subida, al cumplirse ya no será el vigente y se irá sin llamar a
+    // nadie: la cancelación deja de depender del mundo de fuera.
+    generacion++;
+    if (handle !== null && handle !== undefined && cancelarHandle) {
+      try {
+        cancelarHandle(handle);
+      } catch (e) {
+        // `cancelar` es IO inyectado y puede lanzar; la generación ya nos protege.
+      }
       handle = null;
     }
   }
