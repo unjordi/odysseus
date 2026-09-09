@@ -42397,6 +42397,23 @@ body.hoststats-compact-docked .chat-input-bar {
    xterm rendea exacto y el sobrante (hasta ~1 celda + el gutter de la barra) muestra el fondo #1e1e2e, limpio.
    NO volver a poner `#term-xterm .xterm { width/height: 100% !important }`. */
 
+/* El emulador NO puede HEREDAR métricas de texto del modal — y esto NO es cosmético, es la aritmética
+   de la rejilla. `.modal-content` trae `letter-spacing: -0.015em` con `font-size: 14px`, o sea −0.21 px
+   COMPUTADOS, y eso se hereda hasta el contenedor OCULTO con el que xterm mide el glifo
+   (`.xterm-width-cache-measure-container`, hijo de `.xterm-screen`; mide `'W'.repeat(32)` y divide entre 32).
+   Con el −0.21 px encima, xterm mide la 'W' 0.21 px MÁS ANGOSTA de lo que después pinta, y "compensa"
+   poniéndole a `.xterm-rows` un `letter-spacing: cellWidth − anchoMedido` INLINE — que SUSTITUYE al
+   −0.21 px heredado en vez de sumarse. Resultado medido (2026-09-08, Chrome, caja de 738 px):
+   `css.cell.width` = 8 px pero cada columna se PINTA a 8.21875 px; a 90 columnas son 739.7 px pintados
+   contra 720 px calculados → 19.7 px ≈ 2.4 celdas que el `overflow: hidden` de `#term-xterm` RECORTA por
+   la derecha (el bug de "se come el último par de caracteres").
+   Neutralizándolo aquí, xterm mide y pinta con la MISMA métrica y el `letter-spacing` inline de las filas
+   sale 0. Solo métricas de texto: NO se toca width/height (ver el bloque de arriba). */
+#term-xterm .xterm {
+  letter-spacing: normal;
+  word-spacing: normal;
+}
+
 /* Scrollbar SOLO cuando de verdad hay overflow. xterm.css fuerza overflow-y:scroll (barra siempre visible)
    → lo bajamos a auto: sin scrollback que quepa, no hay barra.
    `scrollbar-gutter: stable` reserva su carril SIEMPRE, aparezca o no la barra: así el ancho útil del texto

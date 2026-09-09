@@ -1,6 +1,6 @@
 // static/js/term-geometry.js — las decisiones puras del widget de Terminal, fuera del DOM para poder
-// probarlas offline (`scratch/pty-frontend/probe-term-ui.mjs`). Sin imports, sin `window`, sin WebSocket:
-// aritmética y una máquina de estados chiquita.
+// probarlas offline (`node scratch/pty-frontend/probe-term-ui.mjs`, exit 0 = verde). Sin imports, sin
+// `window`, sin WebSocket: aritmética y una máquina de estados chiquita.
 //
 // Por qué viven aquí y no inline en terminal.js: son las que se rompieron en producción y las únicas
 // verificables sin navegador. Tenerlas puras = tener probe.
@@ -32,18 +32,26 @@
  *    texto quedaría pegado al borde.
  *  - `cellWidth`/`cellHeight` = `_renderService.dimensions.css.cell` de xterm (métrica de UNA celda con la
  *    fuente que de verdad está rendeando).
+ *  - `paintedCellWidth` (opcional, default 0) = paso REAL con el que el navegador PINTA una columna
+ *    (avance del glifo + el `letter-spacing` que el DOM-renderer le pone a `.xterm-rows`), medido del DOM.
+ *    Existe porque `cellWidth` es lo que xterm CREE que mide una celda y puede NO ser lo que pinta: si algo
+ *    heredado (un `letter-spacing` del contenedor) descuadra la medición interna de xterm, cada columna se
+ *    pinta más ancha que `cellWidth` y el error se ACUMULA — a 90 columnas, ~20 px que el `overflow: hidden`
+ *    del contenedor recorta. Se divide entre el MAYOR de los dos para que quepan las dos cosas: el texto que
+ *    de verdad se pinta Y la caja `cols*cellWidth` que xterm le da a `.xterm-screen`.
  *
  * Devuelve `null` cuando alguna medida todavía no es utilizable (contenedor sin layout, o la fuente aún no
  * medida → celda 0). `null` significa "no resizees todavía", NUNCA "usa un default".
  *
- * El `floor` es lo que garantiza que la rejilla nunca sobresalga: cols*cellWidth <= ancho disponible.
+ * El `floor` es lo que garantiza que la rejilla nunca sobresalga: cols*paso <= ancho disponible, donde el
+ * `paso` es el MAYOR entre lo que xterm cree que mide una celda y lo que el navegador de verdad pinta.
  */
 export function computeGrid(m) {
   if (!m) return null;
   const {
     boxWidth, boxHeight,
     padLeft = 0, padRight = 0, padTop = 0, padBottom = 0,
-    cellWidth, cellHeight, scrollbarWidth = 0, minRightGap = 0,
+    cellWidth, cellHeight, scrollbarWidth = 0, minRightGap = 0, paintedCellWidth = 0,
   } = m;
   if (!isFinite(cellWidth) || !isFinite(cellHeight) || cellWidth <= 0 || cellHeight <= 0) return null;
   if (!isFinite(boxWidth) || !isFinite(boxHeight)) return null;
@@ -52,8 +60,14 @@ export function computeGrid(m) {
   const availWidth = boxWidth - padLeft - padRight - rightGap;
   const availHeight = boxHeight - padTop - padBottom;
   if (availWidth <= 0 || availHeight <= 0) return null;
+  // Paso HORIZONTAL real de una columna. `cellWidth` es la creencia de xterm (y el ancho que le da a
+  // `.xterm-screen`); `paintedCellWidth` es lo que el navegador pinta. Cuando difieren, dividir entre el
+  // menor deja la rejilla más ancha que la caja y el contenedor recorta las últimas columnas: se usa el
+  // MAYOR, que hace caber ambas. Si no se midió (0 / no finito) se cae a `cellWidth`, el comportamiento previo.
+  const painted = isFinite(paintedCellWidth) && paintedCellWidth > 0 ? paintedCellWidth : 0;
+  const colPitch = Math.max(cellWidth, painted);
   return {
-    cols: Math.max(2, Math.floor(availWidth / cellWidth)),
+    cols: Math.max(2, Math.floor(availWidth / colPitch)),
     rows: Math.max(1, Math.floor(availHeight / cellHeight)),
   };
 }
