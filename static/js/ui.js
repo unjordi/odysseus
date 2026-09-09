@@ -9,6 +9,10 @@ import * as Modals from './modalManager.js';
 import spinnerModule from './spinner.js';
 import { registerMenuDismiss, dismissTopMenu, dismissOrRemove } from './escMenuStack.js';
 import { nextToolWindowZ, topToolWindowZ } from './toolWindowZOrder.js';
+// #29(d) tiling estilo Rectangle: se auto-inicializa al importarse (registra sus atajos Ctrl+Alt+…
+// en DOMContentLoaded). ui.js es el home natural (atajos de teclado + modales) y siempre está en el
+// grafo de carga del shell. Ver static/js/tileShortcuts.js + tileSlots.js (el cálculo, #141).
+import './tileShortcuts.js';
 
 let toastEl = null;
 let autoScrollEnabled = true;
