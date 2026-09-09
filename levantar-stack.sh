@@ -39,6 +39,56 @@
 set -euo pipefail
 cd "$(dirname "$0")"   # el project dir del compose ES este directorio (las rutas relativas dependen de él)
 
+# ── El árbol se pone AL DÍA antes de construir ────────────────────────────────────────────────────
+# El agujero que esto cierra (medido 2026-09-08): este script construye el stack DESDE ESTE ÁRBOL, y el
+# árbol no se actualiza solo. El CD de axon lo invoca tras un merge, así que el ciclo era: mergear en
+# GitHub → CD verde → contenedor reconstruido CON EL CÓDIGO DE ANTES. Cuatro veces se reportó "ya quedó
+# desplegado" sobre algo que seguía sirviendo lo viejo (local `6e7fced` vs `origin/develop` `51d67eb`,
+# con el frontend anterior en el aire). "Desplegado" significaba "mergeado".
+#
+# Va aquí y no en el CD porque este script es LA herramienta: quien lo corre a mano tiene el mismo
+# derecho a que lo que levante sea lo que está en develop. Y el `pull` es gratis comparado con el
+# rebuild completo que este script hace siempre a propósito.
+#
+# Reglas, todas por FALLO RUIDOSO — el silencio es exactamente lo que causó el bug:
+#   · fuera de un repo git (un tarball, una copia): no aplica, se sigue sin ruido;
+#   · árbol SUCIO: NO se toca nada y se AVISA con la lista de archivos. Levantar con cambios sin
+#     commitear es legítimo (se está probando algo), pero tiene que ser una decisión visible;
+#   · no es fast-forward (la rama divergió): se PARA. Un merge automático aquí puede romper el stack
+#     de formas que nadie está mirando;
+#   · sin remoto alcanzable: se AVISA y se sigue con lo que hay — quedarse sin stack por estar
+#     offline sería peor que construir lo local.
+# `AXON_SKIP_PULL=1` lo salta por completo (bisect, o levantar a propósito un commit viejo).
+actualizar_arbol() {
+  git rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
+  if [ "${AXON_SKIP_PULL:-0}" = "1" ]; then
+    echo "▶ AXON_SKIP_PULL=1 — se construye este árbol tal cual ($(git rev-parse --short HEAD))"
+    return 0
+  fi
+  local rama; rama="$(git rev-parse --abbrev-ref HEAD)"
+  if [ -n "$(git status --porcelain)" ]; then
+    echo "⚠️  árbol SUCIO en '$rama' — NO se hace pull; se construye lo que hay AQUÍ:"
+    git status --porcelain | sed 's/^/      /' | head -10
+    return 0
+  fi
+  git fetch origin --quiet 2>/dev/null || { echo "⚠️  no pude alcanzar origin — construyo lo local ($(git rev-parse --short HEAD))"; return 0; }
+  local upstream; upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+  [ -n "$upstream" ] || { echo "▶ '$rama' sin upstream — construyo lo local ($(git rev-parse --short HEAD))"; return 0; }
+  local antes; antes="$(git rev-parse --short HEAD)"
+  if [ "$(git rev-parse HEAD)" = "$(git rev-parse "$upstream")" ]; then
+    echo "▶ árbol al día con $upstream ($antes)"
+    return 0
+  fi
+  if ! git merge-base --is-ancestor HEAD "$upstream" 2>/dev/null; then
+    echo "✗ '$rama' DIVERGIÓ de $upstream — no es fast-forward. No construyo a ciegas." >&2
+    echo "  Reconcilia a mano, o corre con AXON_SKIP_PULL=1 si de verdad quieres levantar este árbol." >&2
+    exit 1
+  fi
+  git merge --ff-only "$upstream" --quiet
+  echo "▶ árbol actualizado: $antes → $(git rev-parse --short HEAD)  (desde $upstream)"
+}
+actualizar_arbol
+
 AXON_REPO="${AXON_REPO:-$HOME/code/axon}"
 CON_AXON=1; CON_OLLAMA=1; SOLO_CONFIG=0; PUBLICAR=1
 for a in "$@"; do
