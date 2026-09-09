@@ -67,6 +67,40 @@ def test_pty_limit_503_is_distinguished_from_broker_down():
     assert "servicio" in result["downMsg"].lower()
 
 
+def test_pty_limit_numbers_now_survive_from_the_server():
+    # 2026-09-08: axon closed the information gap this file used to report — wsConnect() (ws.ts) now reads
+    # res.statusMessage, so the reason phrase rejectWebSocket() set ("too many pty sessions (7/8) -
+    # AXON_TERM_BROKER_MAX_PTYS") rides along inside the Error, and brokerUnreachableMsg() wraps it as-is.
+    # This is the exact real shape (verified against the axon diff, not invented).
+    raw = (
+        "term broker inalcanzable (unix:/home/u/.axon/term-broker.sock): "
+        "WS upgrade rechazado: HTTP 503 — too many pty sessions (7/8) - AXON_TERM_BROKER_MAX_PTYS "
+        "— ¿está corriendo axon-term-broker.service y el socket montado en el contenedor "
+        "(por DIRECTORIO, no por archivo)?"
+    )
+    body = f"""
+      const cls = classifyTermErrorText({json.dumps(raw)});
+      console.log(JSON.stringify(cls));
+    """
+    result = json.loads(_run(body))
+    assert result["kind"] == "limit"
+    # The real numbers must now show up — no more "generic, no numbers" for this case.
+    assert "7/8" in result["message"]
+
+
+def test_pty_limit_match_does_not_require_the_pattern_at_the_end():
+    # The match must not assume the string ENDS in the HTTP code or the limit pattern — both
+    # brokerUnreachableMsg()'s trailing pista and wsConnect()'s leading wrapper text surround it on real
+    # traffic. Here the limit pattern sits in the middle, with unrelated text on both sides.
+    raw = "prefijo irrelevante too many pty sessions (3/32) - AXON_TERM_BROKER_MAX_PTYS sufijo irrelevante"
+    body = f"""
+      console.log(JSON.stringify(classifyTermErrorText({json.dumps(raw)})));
+    """
+    result = json.loads(_run(body))
+    assert result["kind"] == "limit"
+    assert "3/32" in result["message"]
+
+
 def test_session_limit_reuses_the_servers_own_numbers():
     # Real text from term-session.ts ShellSessionPool.run() — piped byte-for-byte to the one-shot SSE error.
     raw = (
@@ -140,3 +174,43 @@ def test_close_1000_is_silent_and_other_codes_keep_code_and_reason():
     assert "1011" in other["message"] and "broker unreachable" in other["message"]
     assert no_reason["kind"] == "generic"
     assert "1006" in no_reason["message"]
+
+
+def test_relay_propagated_1013_is_buffer_pressure_with_prefix_stripped():
+    # 2026-09-08: relayWsToWs() (term-pty-bridge.ts) used to re-close the browser-facing side with a
+    # hardcoded 1000/1011, so a 1013 from the axon<->broker hop arrived as generic "peer closed" — same
+    # disease as the 503 case, in a third spot. It now propagates the real code with reason "peer: <razón
+    # original>". The code alone must still classify as buffer pressure, and the "peer: " prefix must not
+    # leak into the shown text (no ugly nesting).
+    reason = "peer: cliente no drena: 9000000 B pendientes sobre el techo de 8388608 B"
+    body = f"""
+      console.log(JSON.stringify(classifyTermCloseEvent(1013, {json.dumps(reason)})));
+    """
+    result = json.loads(_run(body))
+    assert result["kind"] == "buffer"
+    assert not result["message"].startswith("peer")
+    assert "peer:" not in result["message"]
+    assert "cliente no drena: 9000000 B pendientes sobre el techo de 8388608 B" in result["message"]
+
+
+def test_relay_close_without_original_reason_still_strips_the_prefix():
+    # relayWsToWs() falls back to "peer: cierre sin motivo" when the original close carried no reason.
+    body = """
+      console.log(JSON.stringify(classifyTermCloseEvent(1011, 'peer: cierre sin motivo')));
+    """
+    result = json.loads(_run(body))
+    assert result["kind"] == "generic"
+    assert "peer:" not in result["message"]
+    assert "cierre sin motivo" in result["message"]
+
+
+def test_relay_peer_error_reason_also_strips_its_prefix():
+    # relayWsToWs()'s onError branch always closes 1011 with reason "peer error: <e.message>" (no original
+    # close code to propagate, since it came from a socket error, not a close frame).
+    body = """
+      console.log(JSON.stringify(classifyTermCloseEvent(1011, 'peer error: read ECONNRESET')));
+    """
+    result = json.loads(_run(body))
+    assert result["kind"] == "generic"
+    assert "peer" not in result["message"]
+    assert "read ECONNRESET" in result["message"]
