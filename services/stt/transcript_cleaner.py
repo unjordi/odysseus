@@ -330,7 +330,11 @@ _REMOVABLE_INEQUIVOCAS = _FILLERS_UNAMBIGUOUS | {"este", "esteee", "digamos"}
 _REMOVABLE = _REMOVABLE_INEQUIVOCAS | _REMOVABLE_AMBIGUAS
 
 
-_PAUSAS = {",", ".", ";", ":", "\x00", "!", "?", "\u2026"}
+# El `\x00` que este conjunto traía era CÓDIGO MUERTO (hallazgo BAJO de la auditoría): esa marca la
+# fabrica `_deterministic_clean` a partir de los puntos suspensivos y la borra antes de devolver, así que
+# nunca llega al texto que se compara aquí — que es el ORIGINAL del llamador. Lo que sí puede venir es el
+# carácter de puntos suspensivos, y ESE sí es una pausa de verdad: se queda él, y el fantasma se va.
+_PAUSAS = {",", ".", ";", ":", "!", "?", "\u2026"}
 
 
 def _delimitadas_como_muletilla(source: str) -> List[bool]:
@@ -620,16 +624,28 @@ def clean_with_llm(
         return None, "respuesta fuera de formato"
 
     candidate = match.group(1).strip()
-    _note_llm_success()
 
+    # El ÉXITO se anota al final, no aquí. Antes bastaba con que la respuesta
+    # trajera los delimitadores para reiniciar el contador — así que un modelo
+    # que contesta BIEN FORMADO pero cuya salida se rechaza siempre (vacía,
+    # reformulando, borrando contenido, mutilando una ruta) mantenía el breaker
+    # abierto para siempre: se pagaba la latencia de cada llamada sin obtener
+    # nunca una limpieza. El breaker existe justo para dejar de pagar eso, así
+    # que cuenta lo ÚTIL, no lo bien-envuelto (hallazgo BAJO de la auditoría).
+    razon: Optional[str] = None
     if not candidate:
-        return None, "respuesta vacía"
-    if not is_deletion_only(text, candidate):
-        return None, "rechazada: reformuló en vez de sólo borrar"
-    if not _removals_are_all_fillers(text, candidate):
-        return None, "rechazada: borró contenido, no sólo relleno"
-    if not _preserves_technical_tokens(text, candidate):
-        return None, "rechazada: alteró un término técnico o una ruta"
+        razon = "respuesta vacía"
+    elif not is_deletion_only(text, candidate):
+        razon = "rechazada: reformuló en vez de sólo borrar"
+    elif not _removals_are_all_fillers(text, candidate):
+        razon = "rechazada: borró contenido, no sólo relleno"
+    elif not _preserves_technical_tokens(text, candidate):
+        razon = "rechazada: alteró un término técnico o una ruta"
+    if razon is not None:
+        _note_llm_failure(razon)
+        return None, razon
+
+    _note_llm_success()
     return candidate, "ok"
 
 
