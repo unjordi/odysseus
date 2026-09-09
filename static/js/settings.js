@@ -1001,7 +1001,14 @@ async function initSttSettings() {
   async function saveSTT() {
     try {
       var enabled = sttEnabledToggle ? sttEnabledToggle.checked : false;
-      await _postSettings({ stt_enabled: enabled, stt_provider: provSel.value, stt_model: getModel() || 'base', stt_language: langInput.value.trim() });
+      // Sin modelo elegido NO se manda uno inventado: se OMITE la llave y el backend repone su default.
+      // El `|| 'base'` de antes fosilizaba aquí el default de hace meses —el mismo drift que dejó
+      // `stt_model=large-v3` mandando sobre el código— y encima lo escribía como si el usuario lo hubiera
+      // elegido, lo que rompe la distinción entre "lo que decidí" y "lo que venía por default".
+      var payload = { stt_enabled: enabled, stt_provider: provSel.value, stt_language: langInput.value.trim() };
+      var modelo = getModel();
+      if (modelo) payload.stt_model = modelo;
+      await _postSettings(payload);
       sttMsg.textContent = 'Saved'; sttMsg.style.color = 'var(--fg)'; setTimeout(() => { sttMsg.textContent = ''; }, 2000);
       // Notify voiceRecorder of effective provider and update send button icon
       if (window.voiceRecorderModule) window.voiceRecorderModule._sttProvider = effectiveProvider();
