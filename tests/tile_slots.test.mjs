@@ -212,3 +212,111 @@ test('el mosaico cabe dentro del área en todos los slots', () => {
     }
   }
 });
+
+// ── Casos que nacieron de la 6ª tupla auditora (2026-09-09) ──────────────────
+// Cada defecto cazado se vuelve un caso PERMANENTE, no una línea más en el
+// contrato: el contrato ya prohibía tres de estas cosas y el código las hacía.
+
+test('R-1 · un área con medidas FRACCIONARIAS sigue dando enteros', () => {
+  // getBoundingClientRect devuelve flotantes de rutina: este es el caso NORMAL,
+  // no un borde. Antes solo se redondeaba la primera parte y la segunda salía
+  // como el resto (1280.5 - 640 = 640.5).
+  const areaReal = { left: 100.25, top: 50.75, width: 1280.5, height: 722.5 };
+  for (const slot of SLOTS) {
+    let e = estadoInicial();
+    if (slot === 'restore') e = calcular(e, 'left', areaReal, LIBRE).estado;
+    for (let i = 0; i < 3; i++) {
+      const r = calcular(e, slot, areaReal, LIBRE);
+      if (r.rect) esEntero(r.rect, `${slot} con área fraccionaria`);
+      e = r.estado;
+    }
+  }
+});
+
+test('R-1 · un área que al truncar queda en 0 devuelve null, no una ventana invisible', () => {
+  const e = estadoInicial();
+  const r = calcular(e, 'left', { left: 0, top: 0, width: 0.4, height: 500 }, LIBRE);
+  assert.equal(r.rect, null, '0.4 px de ancho produjo un rect');
+  assert.deepEqual(r.estado, e);
+});
+
+test('R-2 · el ciclado de `right` da LA fracción pedida, no su complemento', () => {
+  // Antes `right` recibía el complemento: el ciclo daba 1/2 -> 1/3 -> 2/3 mientras
+  // `left` daba 1/2 -> 2/3 -> 1/3, así que apretar dos veces "derecha" ENCOGÍA la
+  // ventana y dos veces "izquierda" la agrandaba. Es lo primero que se nota.
+  let eI = estadoInicial();
+  let eD = estadoInicial();
+  for (let i = 0; i < 3; i++) {
+    const izq = calcular(eI, 'left', AREA, LIBRE);
+    const der = calcular(eD, 'right', AREA, LIBRE);
+    assert.ok(Math.abs(izq.rect.width - der.rect.width) <= 1,
+      `paso ${i}: izquierda ${izq.rect.width} vs derecha ${der.rect.width} — el ciclo es asimétrico`);
+    // Y la derecha SIEMPRE pegada al borde derecho del área.
+    assert.equal(der.rect.left + der.rect.width, AREA.left + AREA.width,
+      `paso ${i}: la mitad derecha no cierra contra el borde`);
+    eI = izq.estado;
+    eD = der.estado;
+  }
+});
+
+test('R-2 · el ciclado de `bottom` da LA fracción pedida, no su complemento', () => {
+  let eT = estadoInicial();
+  let eB = estadoInicial();
+  for (let i = 0; i < 3; i++) {
+    const arr = calcular(eT, 'top', AREA, LIBRE);
+    const aba = calcular(eB, 'bottom', AREA, LIBRE);
+    assert.ok(Math.abs(arr.rect.height - aba.rect.height) <= 1,
+      `paso ${i}: arriba ${arr.rect.height} vs abajo ${aba.rect.height} — el ciclo es asimétrico`);
+    assert.equal(aba.rect.top + aba.rect.height, AREA.top + AREA.height,
+      `paso ${i}: la mitad inferior no cierra contra el borde`);
+    eT = arr.estado;
+    eB = aba.estado;
+  }
+});
+
+test('R-2 · left(f) y right(1-f) siguen embaldosando el área EXACTAMENTE', () => {
+  // La invariante que el arreglo NO debía romper: la pareja complementaria tilea
+  // sin el píxel de hueco ni el de traslape, con ancho impar.
+  const pares = [[0, 0], [1, 2], [2, 1]]; // (paso de left, paso de right) complementarios
+  for (const [pi, pd] of pares) {
+    let eI = estadoInicial();
+    let eD = estadoInicial();
+    for (let i = 0; i <= pi; i++) { const r = calcular(eI, 'left', AREA, LIBRE); eI = r.estado; if (i === pi) var izq = r.rect; }
+    for (let i = 0; i <= pd; i++) { const r = calcular(eD, 'right', AREA, LIBRE); eD = r.estado; if (i === pd) var der = r.rect; }
+    assert.equal(izq.width + der.width, AREA.width,
+      `left(paso ${pi}) + right(paso ${pd}) = ${izq.width}+${der.width} ≠ ${AREA.width}`);
+    assert.equal(der.left, AREA.left + izq.width, 'no se tocan en la costura');
+  }
+});
+
+test('R-3 · un rectActual NULO no lanza, y no fabrica una geometría libre basura', () => {
+  for (const malo of [null, undefined, {}, 42, 'x', { left: 0, top: 0, width: NaN, height: 10 }]) {
+    const e = estadoInicial();
+    // center leía rectActual.width y LANZABA con null.
+    const c = calcular(e, 'center', AREA, malo);
+    assert.ok(c.rect, `center con rectActual ${JSON.stringify(malo)} no devolvió rect`);
+    esEntero(c.rect, 'center con rectActual inusable');
+    // Y la geometría libre se guarda como null, no como {} — porque restore
+    // habría devuelto al caller un rect con los campos en undefined.
+    const m = calcular(e, 'left', AREA, malo);
+    assert.equal(m.estado.libre, null,
+      `guardó una geometría libre basura: ${JSON.stringify(m.estado.libre)}`);
+    const v = calcular(m.estado, 'restore', AREA, malo);
+    assert.equal(v.rect, null, 'restore devolvió una geometría inventada');
+  }
+});
+
+test('R-6 · restore SIN libre no borra el slot ni el paso del ciclo', () => {
+  // Antes limpiaba igual, así que un restore que no movió nada le borraba al caller
+  // la posición del ciclo: el siguiente atajo arrancaba desde 1/2 sin que nada
+  // hubiera pasado en pantalla. El probe viejo no lo veía porque solo lo probaba
+  // desde el estado inicial, donde limpiar es un no-op.
+  const conCiclo = calcular(calcular(estadoInicial(), 'left', AREA, null).estado, 'left', AREA, null);
+  assert.equal(conCiclo.estado.libre, null, 'precondición: sin geometría libre guardada');
+  assert.equal(conCiclo.estado.slot, 'left');
+  assert.equal(conCiclo.estado.paso, 1);
+  const v = calcular(conCiclo.estado, 'restore', AREA, null);
+  assert.equal(v.rect, null);
+  assert.deepEqual(v.estado, conCiclo.estado,
+    'restore sin nada que restaurar borró el estado del ciclo');
+});
