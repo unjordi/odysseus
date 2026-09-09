@@ -310,3 +310,24 @@ def test_el_breaker_exige_otra_racha_completa_tras_el_cooldown():
     tc._note_llm_failure("probe")          # el segundo sí
     assert not tc._llm_available()
     tc.reset_llm_circuit()
+
+
+# ── F-3: la ambigua DELIMITADA en final de cláusula también era contenido ───────
+# El candado miraba solo la pausa de ATRÁS. En español dictado TODA palabra final
+# de cláusula la lleva, así que seis borrados reales pasaban con los dos candados
+# en verde. Ahora se exige pausa por AMBOS lados (una muletilla suelta va ENTRE
+# pausas; una palabra de contenido tiene texto pegado por delante).
+
+def test_la_ambigua_al_final_de_la_clausula_no_se_borra():
+    assert not _acepta("el resultado es bueno.", "el resultado es.")
+    assert not _acepta("dime la verdad.", "dime la.")
+    assert not _acepta("el script va, y luego falla.", "el script y luego falla.")
+    assert not _acepta("no sé si va.", "no sé si.")
+    assert not _acepta("déjalo como.", "déjalo.")
+    assert not _acepta("prefiero este o.", "prefiero este.")
+
+
+def test_la_muletilla_entre_pausas_sigue_borrandose():
+    assert _acepta("y, bueno, seguimos", "y, seguimos")
+    assert _acepta("va, entonces lo dejamos", "entonces lo dejamos")
+    assert _acepta("bueno, ya está", "ya está")   # el inicio del texto cuenta como pausa

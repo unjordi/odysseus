@@ -330,24 +330,37 @@ _REMOVABLE_INEQUIVOCAS = _FILLERS_UNAMBIGUOUS | {"este", "esteee", "digamos"}
 _REMOVABLE = _REMOVABLE_INEQUIVOCAS | _REMOVABLE_AMBIGUAS
 
 
+_PAUSAS = {",", ".", ";", ":", "\x00", "!", "?", "\u2026"}
+
+
 def _delimitadas_como_muletilla(source: str) -> List[bool]:
-    """Por cada palabra de `source`, si venía DELIMITADA (coma/punto/pausa detrás).
+    """Por cada palabra de `source`, si venía DELIMITADA por pausas a AMBOS lados.
 
     Paralelo posicional a `_words(source)`: el índice i de una lista corresponde
-    al de la otra. Es la firma que el carril determinista ya usa para decidir si
-    un `este` corto es muletilla o es el demostrativo — aquí se reutiliza para
-    las palabras AMBIGUAS.
+    al de la otra.
+
+    POR QUÉ AMBOS LADOS, y no solo la pausa de atrás (auditoría F-3, 2026-09-09).
+    Mirar solo lo que SIGUE no distingue una muletilla de una palabra de contenido
+    en final de cláusula — y en español dictado TODA palabra final lleva pausa
+    detrás. Con la regla vieja se aceptaban seis borrados reales:
+
+        "el resultado es bueno."      -> "el resultado es."
+        "dime la verdad."             -> "dime la."
+        "el script va, y luego falla" -> "el script y luego falla"
+
+    Una muletilla suelta va ENTRE pausas ("y, bueno, seguimos"; "va, entonces…"),
+    así que exigir las dos las conserva y protege el contenido. El inicio del
+    texto cuenta como pausa: una muletilla de arranque ("Bueno, ya está") no
+    tiene nada delante y sigue siendo muletilla.
     """
     out: List[bool] = []
     for m in _WORD_TOKEN_RE.finditer(source):
-        resto = source[m.end():]
-        j = 0
-        while j < len(resto) and resto[j] == " ":
-            j += 1
-        # cuenta como delimitada si lo que sigue (saltando espacios) es puntuación
-        # de pausa o la marca de silencio del transcriptor
-        out.append(bool(resto[:j + 1].strip(" ")[:1] in {",", ".", ";", ":", "\x00"})
-                   or resto[:1] in {",", ".", ";", ":"})
+        antes = source[:m.start()].rstrip(" ")
+        # inicio del texto = pausa (no hay nada delante que pudiera pegarse)
+        previa = antes == "" or antes[-1:] in _PAUSAS
+        resto = source[m.end():].lstrip(" ")
+        posterior = resto[:1] in _PAUSAS
+        out.append(previa and posterior)
     return out
 
 
