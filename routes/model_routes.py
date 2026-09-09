@@ -250,6 +250,16 @@ def _default_endpoint_needs_assignment(
 _ANY_BIND_HOSTS = {"0.0.0.0", "::"}
 _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", *_ANY_BIND_HOSTS}
 
+# The axon provider is VIRTUAL: its base_url is the sentinel "axon://local" (not
+# a real http URL), so it has no /v1/models to fetch. Its "models" are the four
+# routing lanes. Mirrors ROUTING_MODES in src/router/routing-mode.ts of axon.
+AXON_LANES = ["local-first", "local-only", "frontier-first", "frontier-only"]
+
+
+def _is_axon_virtual(base_url: str) -> bool:
+    """True when base_url is the axon virtual sentinel (axon://...)."""
+    return (base_url or "").startswith("axon://")
+
 
 def _docker_host_gateway_reachable() -> bool:
     """True when we run inside a container whose host is reachable via
@@ -971,6 +981,11 @@ def _probe_endpoint(base_url: str, api_key: str = None, timeout: int = 5) -> Lis
     For Anthropic, queries their /v1/models API, falling back to hardcoded list."""
     from src.endpoint_resolver import resolve_url
     from src.llm_core import httpx_get_kimi_aware
+    # axon is a VIRTUAL provider (base_url sentinel "axon://local"): it has no
+    # http /v1/models to fetch. Short-circuit before any http call and return
+    # its four routing lanes as the model list (refresh = success, no error).
+    if _is_axon_virtual(base_url):
+        return list(AXON_LANES)
     base = resolve_url(_normalize_base(base_url))
     provider = _safe_detect_provider(base)
     if provider == "chatgpt-subscription":
@@ -1080,6 +1095,10 @@ def _probe_endpoint(base_url: str, api_key: str = None, timeout: int = 5) -> Lis
 def _ping_endpoint(base_url: str, api_key: str = None, timeout: float = 1.5) -> Dict[str, Any]:
     """Reachability probe that does not require installed/listed models."""
     from src.endpoint_resolver import resolve_url
+    # axon is a VIRTUAL provider (base_url sentinel "axon://local"): no http
+    # server to reach. Treat it as always alive/ok without any http call.
+    if _is_axon_virtual(base_url):
+        return {"reachable": True, "status_code": 200, "error": None}
     base = resolve_url(_normalize_base(base_url))
     headers = _safe_build_headers(api_key, base)
 

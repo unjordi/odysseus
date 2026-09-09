@@ -308,6 +308,30 @@ class TestProbeZaiCoding:
         appended = [m for m in coding_curated if m in result and m != "glm-5.1"]
         assert len(appended) > 0, "curated-only models should be appended"
 
+    def test_probe_axon_virtual_returns_lanes_without_http(self, monkeypatch):
+        """axon:// sentinel is a VIRTUAL provider: no http fetch, returns the 4 lanes."""
+        self._patch(monkeypatch)
+
+        def boom(*a, **k):
+            raise AssertionError("http must NOT be called for axon:// virtual endpoint")
+
+        monkeypatch.setattr(model_routes.httpx, "get", boom)
+        monkeypatch.setattr(llm_core, "httpx_get_kimi_aware", boom)
+        result = _probe_endpoint("axon://local")
+        assert result == ["local-first", "local-only", "frontier-first", "frontier-only"]
+
+    def test_ping_axon_virtual_is_alive_without_http(self, monkeypatch):
+        """axon:// sentinel is always reachable/ok without any http call."""
+        self._patch(monkeypatch)
+
+        def boom(*a, **k):
+            raise AssertionError("http must NOT be called for axon:// virtual endpoint")
+
+        monkeypatch.setattr(model_routes.httpx, "get", boom)
+        result = _ping_endpoint("axon://local")
+        assert result["reachable"] is True
+        assert result["error"] is None
+
     def test_probe_does_not_use_base_zai_curated(self, monkeypatch):
         """The coding endpoint must use zai-coding, NOT the base zai list."""
         self._patch(monkeypatch)
