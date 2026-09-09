@@ -65,6 +65,7 @@ import { nextToolWindowZ } from './toolWindowZOrder.js';
 import {
   PRIMARY_ID, createInstanceRegistry, createDisposerBag, cascadePosition, sessionIdFor,
 } from './term-instances.js';
+import { classifyTermErrorText, classifyTermCloseEvent } from './term-errors.js';
 
 // ─────────────────────────────── estado GLOBAL (lo poco que lo es) ───────────────────────────────
 
@@ -657,27 +658,47 @@ function _openPty(inst) {
     } else if (typeof ev.data === 'string') {
       try {
         const o = JSON.parse(ev.data);
-        // PTY murió instantáneo SIN emitir nada (p. ej. `script` no está en el contenedor) → degrada a one-shot
-        // en vez de dejar al usuario atorado en un xterm con solo un [error].
+        // PTY murió instantáneo SIN emitir nada (p. ej. `script` no está en el contenedor, o el broker
+        // rechazó el handshake — techo alcanzado, o no responde) → degrada a one-shot en vez de dejar al
+        // usuario atorado en un xterm con solo un [error]. El PORQUÉ (A-2): antes de `classifyTermErrorText`
+        // esta rama tragaba `o.error` por completo y mostraba SIEMPRE el mismo texto genérico — un techo de
+        // PTYs (arréglalo cerrando una terminal) y un broker caído (arréglalo revisando el servicio) se
+        // veían idénticos. Ahora sí se distingue, con el texto REAL que el servidor mandó.
         if ((o.type === 'error' || o.type === 'exit') && !inst.gotOutput && (Date.now() - inst.ptyOpenedAt) < 2500) {
           inst.ptyConnected = false;
           try { ws.close(); } catch { /* */ }
           _showMode(inst, 'oneshot');
           const { output, input } = inst.els;
-          if (output) _appendLine(output, '[terminal interactiva no disponible aquí — modo comando]\n', 'term-exit');
+          if (output) {
+            const detail = o.type === 'error' ? classifyTermErrorText(o.error).message : null;
+            _appendLine(
+              output,
+              `[terminal interactiva no disponible aquí — modo comando]${detail ? ` (${detail})` : ''}\n`,
+              'term-exit',
+            );
+          }
           if (input) input.focus();
           return;
         }
-        if (o.type === 'error') term.write(`\r\n\x1b[31m[error] ${o.error || 'desconocido'}\x1b[0m\r\n`);
+        if (o.type === 'error') term.write(`\r\n\x1b[31m[error] ${classifyTermErrorText(o.error).message}\x1b[0m\r\n`);
         else if (o.type === 'exit') term.write(`\r\n\x1b[90m[sesión terminada (exit ${o.code})]\x1b[0m\r\n`);
       } catch { /* control ilegible */ }
     }
   };
-  ws.onclose = () => {
+  ws.onclose = (ev) => {
     if (inst.destroyed || inst.ws !== ws) return;
     inst.ptyConnected = false;
     inst.ptySize.closed();   // sin canal no se manda nada; el próximo _openPty hace `born()` con las dims nuevas
-    if (inst.term) { try { inst.term.write('\r\n\x1b[90m[desconectado — reabre la terminal para reconectar]\x1b[0m\r\n'); } catch { /* */ } }
+    if (inst.term) {
+      try {
+        // El código/razón del cierre SÍ llegan aquí (a diferencia del rechazo en el handshake, que el
+        // navegador no expone): un 1013 es la válvula dura de backpressure de ws.ts, cualquier otro código
+        // no-1000 es un cierre "raro" que antes se tragaba entero. Ver term-errors.js.
+        const cls = classifyTermCloseEvent(ev && ev.code, ev && ev.reason);
+        const label = cls.message ? `desconectado: ${cls.message}` : 'desconectado';
+        inst.term.write(`\r\n\x1b[90m[${label} — reabre la terminal para reconectar]\x1b[0m\r\n`);
+      } catch { /* */ }
+    }
   };
   ws.onerror = () => {
     if (inst.destroyed || inst.ws !== ws) return;
@@ -743,7 +764,7 @@ async function _runCommandOneShot(inst, cmd) {
         const parsed = _parseRecord(record);
         if (!parsed || parsed.done) continue;
         const { isError, payload } = parsed;
-        if (isError) _appendLine(output, `[error] ${(payload && payload.error) || 'unknown error'}\n`, 'term-stderr');
+        if (isError) _appendLine(output, `[error] ${classifyTermErrorText(payload && payload.error).message}\n`, 'term-stderr');
         else if (payload && payload.type === 'stdout') _appendLine(output, payload.chunk, null);
         else if (payload && payload.type === 'stderr') _appendLine(output, payload.chunk, 'term-stderr');
         else if (payload && payload.type === 'exit') _appendLine(output, `[exit ${payload.code}]\n`, 'term-exit');
