@@ -88,6 +88,8 @@ const _sessions = makeEndpointState();
 const _chats = makeEndpointState();
 const _brain = makeEndpointState();
 const _broker = makeEndpointState();
+let _brokerSondeo = null;   // el modo REAL sondeando al broker (container/host/host-down): la ÚNICA
+                            // verdad del broker que axon puede afirmar cuando corre contenerizado.
 const _brokerKnobs = makeEndpointState();
 
 const $ = (id) => document.getElementById(id);
@@ -674,6 +676,22 @@ function knobRowHtml(k) {
   return html + '</div>';
 }
 
+// El SONDEO es lo único del broker que axon puede afirmar cuando corre contenerizado: le habla por el
+// socket bindeado, sin depender de ver la sesión de usuario del host. Se muestra SIEMPRE, arriba de
+// todo, porque "¿responde?" es la verdad que más importa y la que sobrevive al despliegue real.
+function sondeoPanelHtml(sondeo) {
+  if (!sondeo || typeof sondeo !== 'object') return '';
+  const modo = sondeo.mode;
+  let etiqueta; let valor;
+  if (modo === 'container') { etiqueta = 'Terminal'; valor = 'local del contenedor (sin broker configurado)'; }
+  else if (modo === 'host') { etiqueta = 'Broker'; valor = 'responde ✓ — la terminal corre en el host'; }
+  else if (modo === 'host-down') { etiqueta = 'Broker'; valor = 'configurado pero NO responde' + (sondeo.detail ? ' · ' + sondeo.detail : ''); }
+  else { etiqueta = 'Broker'; valor = String(modo == null ? '—' : modo); }
+  return '<div class="cortex-dot-list"><div class="cortex-dot-row">'
+    + `<span class="cortex-dot">●</span><span class="cortex-dot-name">${esc(etiqueta)}: ${esc(valor)}</span>`
+    + '</div></div>';
+}
+
 function renderBrokerTab() {
   let html = '<div class="hs-section-label">[ BROKER DE TERMINAL ]</div>';
   html += '<div class="cortex-usage-caption" style="margin-bottom:12px">'
@@ -681,10 +699,24 @@ function renderBrokerTab() {
     + 'arrancar/parar el servicio y editar los knobs vive en el widget de escritorio.'
     + '</div>';
 
+  // El sondeo va primero y siempre que exista (incluso si el estado detallado no se pudo leer).
+  html += sondeoPanelHtml(_brokerSondeo);
+
   if (_broker.status !== 'ok' || !_broker.data) {
-    html += (_broker.status === 'idle' || _broker.status === 'loading')
-      ? '<div class="hoststats-loading">[ ESCANEANDO… ]</div>'
-      : emptyStateInner(stateMessage(_broker));
+    if (_broker.status === 'idle' || _broker.status === 'loading') {
+      html += '<div class="hoststats-loading">[ ESCANEANDO… ]</div>';
+    } else if (_broker.reason === 'sin-vista-del-host') {
+      // NO es un error: axon corre contenerizado y no ve la sesión de usuario del host, así que el
+      // estado DETALLADO (servicio, knobs) solo se lee en el widget de escritorio. El sondeo de arriba
+      // ya dijo lo esencial. Se explica en vez de mostrar una caja de "sin datos" que asustaría.
+      html += '<div class="cortex-usage-caption" style="opacity:0.6;margin-top:4px">'
+        + 'El estado detallado del servicio y los knobs no se pueden leer desde aquí: axon corre '
+        + 'contenerizado, sin acceso a la sesión de usuario del host. Esa vista vive en el widget de '
+        + 'escritorio (KDE). Lo que sí se puede afirmar — si el broker responde — está arriba.'
+        + '</div>';
+    } else {
+      html += emptyStateInner(stateMessage(_broker));
+    }
     return html;
   }
 
@@ -738,13 +770,17 @@ function renderBrokerTab() {
 async function refreshBroker() {
   try {
     const payload = await fetchJson(ENDPOINTS.broker);
+    // El sondeo viaja en la RAÍZ, aparte del estado detallado: existe aunque `ok` sea false.
+    _brokerSondeo = (payload && payload.sondeo) || null;
     if (!payload || payload.ok !== true) {
       _broker.status = 'degraded';
       _broker.data = null;
+      _broker.reason = (payload && payload.reason) || '';
       _broker.message = (payload && (REASON_TEXT[payload.reason] || payload.detail)) || 'sin datos';
     } else {
       _broker.status = 'ok';
       _broker.data = payload.data;
+      _broker.reason = '';
       _broker.message = '';
     }
     const kn = payload && payload.knobs;
@@ -760,6 +796,8 @@ async function refreshBroker() {
   } catch (e) {
     _broker.status = 'error';
     _broker.data = null;
+    _brokerSondeo = null;
+    _broker.reason = '';
     _broker.message = (e && e.message) || 'cortex monitor unreachable';
     _brokerKnobs.status = 'error';
     _brokerKnobs.data = null;
