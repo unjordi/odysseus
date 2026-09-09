@@ -307,24 +307,85 @@ def is_deletion_only(source: str, candidate: str) -> bool:
 # es lo que acota al modelo a la MISMA clase de edición que el carril
 # determinista, dejándole sólo lo que aporta: decidir, con contexto, cuáles
 # instancias ambiguas ("este") son relleno y cuáles no.
-_REMOVABLE = _FILLERS_UNAMBIGUOUS | {
-    "este", "esteee", "o", "sea", "digamos", "digo", "pues", "verdad", "va",
-    "bueno", "como",
-}
+# Unas son relleno SIEMPRE; otras sólo a veces. En un conjunto plano, el modelo
+# queda autorizado a borrar CONTENIDO sin que ningún candado chiste: "borra el
+# archivo viejo o el nuevo" pierde el `o` y pasa a decir otra cosa; "si el build
+# va bien" pierde el `va` y deja de ser una frase. Las dos pasan is_deletion_only
+# Y _removals_are_all_fillers, porque ambas palabras estaban en la lista.
+#
+# Se parten. Las AMBIGUAS sólo se pueden borrar donde el carril determinista
+# también las habría borrado: DELIMITADAS como muletilla (coma o pausa detrás),
+# no sueltas en medio de la oración. Es el mismo criterio que ya aplica `este`
+# corto en `followed_by_pause` — aquí sólo se extiende al resto.
+_REMOVABLE_AMBIGUAS = frozenset({
+    "o", "sea", "digo", "pues", "verdad", "va", "bueno", "como",
+})
+
+_REMOVABLE_INEQUIVOCAS = _FILLERS_UNAMBIGUOUS | {"este", "esteee", "digamos"}
+
+_REMOVABLE = _REMOVABLE_INEQUIVOCAS | _REMOVABLE_AMBIGUAS
+
+
+def _delimitadas_como_muletilla(source: str) -> List[bool]:
+    """Por cada palabra de `source`, si venía DELIMITADA (coma/punto/pausa detrás).
+
+    Paralelo posicional a `_words(source)`: el índice i de una lista corresponde
+    al de la otra. Es la firma que el carril determinista ya usa para decidir si
+    un `este` corto es muletilla o es el demostrativo — aquí se reutiliza para
+    las palabras AMBIGUAS.
+    """
+    out: List[bool] = []
+    for m in _WORD_TOKEN_RE.finditer(source):
+        resto = source[m.end():]
+        j = 0
+        while j < len(resto) and resto[j] == " ":
+            j += 1
+        # cuenta como delimitada si lo que sigue (saltando espacios) es puntuación
+        # de pausa o la marca de silencio del transcriptor
+        out.append(bool(resto[:j + 1].strip(" ")[:1] in {",", ".", ";", ":", "\x00"})
+                   or resto[:1] in {",", ".", ";", ":"})
+    return out
 
 
 def _removals_are_all_fillers(source: str, candidate: str) -> bool:
-    """True si TODO lo que desapareció es relleno (o un tartamudeo repetido)."""
+    """True si TODO lo que desapareció es relleno (o un tartamudeo repetido).
+
+    Las palabras AMBIGUAS (`o`, `va`, `como`…) sólo cuentan como relleno si en el
+    ORIGEN venían delimitadas por una pausa. Sin eso, "borra el viejo o el nuevo"
+    y "si el build va bien" se dejaban mutilar con los dos candados en verde.
+    """
     src, cand = _words(source), _words(candidate)
+    delim = _delimitadas_como_muletilla(source)
+
+    def borrable(i: int) -> bool:
+        w = src[i]
+        if w in _REMOVABLE_INEQUIVOCAS:
+            return True
+        if w in _REMOVABLE_AMBIGUAS:
+            # (1) Como parte de una muletilla MULTIPALABRA ya declarada: `o sea`
+            # pegados nunca son contenido en español —lo ambiguo es el `o` solo—,
+            # así que la frase completa se borra sin pedir pausa. Es el mismo
+            # conjunto que usa `_match_multiword` en el carril determinista.
+            for frase in _FILLERS_MULTIWORD:
+                if tuple(src[i:i + len(frase)]) == frase:
+                    return True
+                # …y también si la palabra cae DENTRO de una frase que empezó antes
+                for k in range(1, len(frase)):
+                    if i >= k and tuple(src[i - k:i - k + len(frase)]) == frase:
+                        return True
+            # (2) Suelta: sólo si venía DELIMITADA por una pausa, igual que el
+            # `este` corto. Sin eso, `o`/`va`/`como` son contenido.
+            return i < len(delim) and delim[i]
+        return False
+
     i = 0
     for w in cand:
         while i < len(src) and src[i] != w:
-            removed = src[i]
             # un tartamudeo es la misma palabra pegada a sí misma
-            repeticion = (i > 0 and src[i - 1] == removed) or (
-                i + 1 < len(src) and src[i + 1] == removed
+            repeticion = (i > 0 and src[i - 1] == src[i]) or (
+                i + 1 < len(src) and src[i + 1] == src[i]
             )
-            if removed not in _REMOVABLE and not repeticion:
+            if not borrable(i) and not repeticion:
                 return False
             i += 1
         if i == len(src):
@@ -332,8 +393,7 @@ def _removals_are_all_fillers(source: str, candidate: str) -> bool:
         i += 1
     # lo que sobre al final también tiene que ser relleno
     while i < len(src):
-        removed = src[i]
-        if removed not in _REMOVABLE and not (i > 0 and src[i - 1] == removed):
+        if not borrable(i) and not (i > 0 and src[i - 1] == src[i]):
             return False
         i += 1
     return True
