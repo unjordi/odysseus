@@ -383,34 +383,6 @@ function _wireCompositionGuard(inst, term, container) {
 }
 
 /**
- * ACENTOS (2/2): en Firefox/Linux la vocal base se cuela CRUDA por el camino de TECLAS — durante la
- * composición llegan keydowns `key:"a" isComposing:true` que xterm procesa y emite como `a` suelta
- * (síntoma `aá`). El acento suelto ya lo corta `_wireCompositionGuard` por el camino de `input`; esto
- * corta el camino de KEYDOWN con la misma técnica: captura en un ancestro (corre antes que el listener
- * de xterm en el textarea) y `stopImmediatePropagation` cuando el evento es de composición
- * (`isComposing === true`). La vocal compuesta final llega por `input` con `inputType:"insertText"`
- * (NO por keydown), así que NO se pierde la letra — ese era el modo de falla del intento con
- * `attachCustomKeyEventHandler` (revertido 2026-09-07). NO `preventDefault`: la composición debe seguir.
- */
-function _wireKeydownCompositionGuard(inst, term, container) {
-  let ta = null;
-  try { ta = term.textarea || (term.element && term.element.querySelector("textarea")) || null; } catch { /* */ }
-  let host = document;
-  try { if (ta && container && container.contains(ta)) host = container; } catch { /* */ }
-  const onKeydownCapture = (ev) => {
-    try {
-      if (ta && ev.target !== ta) return;
-      if (ev.isComposing !== true) return;
-      ev.stopImmediatePropagation();
-    } catch { /* jamás tumbar el widget por esto */ }
-  };
-  try {
-    host.addEventListener("keydown", onKeydownCapture, true);
-    inst.bag.add(() => { try { host.removeEventListener("keydown", onKeydownCapture, true); } catch { /* */ } });
-  } catch { /* sin captura: queda el bug, no un crash */ }
-}
-
-/**
  * Crea (una vez POR INSTANCIA) la instancia de xterm y la monta en el `.term-xterm` de ESA ventana.
  * PRE-REQUISITO: el contenedor ya debe estar VISIBLE. `term.open()` sobre un contenedor `display:none` mide
  * la celda como 0×0, y todo ajuste posterior aborta al ver celda 0 → la rejilla se queda en 80×24 (ver `_openPty`).
@@ -446,7 +418,6 @@ function _ensureTerm(inst) {
   // El acento suelto se corta AQUÍ, en el camino de `input` (no en el de teclas) — ver _wireCompositionGuard.
   // Va después de `term.open()` porque el textarea helper no existe hasta entonces.
   _wireCompositionGuard(inst, term, xterm);
-  _wireKeydownCompositionGuard(inst, term, xterm);
   // Alt-screen (vim/top/claude TUI): sin scrollback → marca el contenedor para ocultar la scrollbar.
   try {
     if (term.buffer && typeof term.buffer.onBufferChange === 'function') {
