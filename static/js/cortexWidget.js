@@ -52,6 +52,8 @@ const ENDPOINTS = {
   sessions: '/api/cortex/sessions',
   chats: '/api/cortex/chats',
   brain: '/api/cortex/brain',
+  // `?knobs=1` trae en la MISMA respuesta el spec de knobs con su valor actual (broker-knobs.sh list).
+  broker: '/api/cortex/broker?knobs=1',
 };
 
 const REASON_TEXT = {
@@ -61,6 +63,9 @@ const REASON_TEXT = {
   no_home: 'axon no tiene $HOME configurado',
   script_not_found: 'brain-scan.sh no se encontró en este host',
   exec_error: 'no se pudo ejecutar brain-scan.sh',
+  'script-no-encontrado': 'los helpers del broker (broker-scan.sh / broker-knobs.sh) no están en este host',
+  'ejecucion-fallo': 'no se pudieron ejecutar los helpers del broker',
+  'json-invalido': 'los helpers del broker devolvieron algo que no es JSON',
 };
 
 const RANGE_LABELS = ['hoy', '7d', '30d', '∞'];
@@ -73,6 +78,7 @@ let _activeTab = 'limites';
 let _rangeIdx = 3; // 0=hoy(0d atrás) 1=7d(6) 2=30d(29) 3=∞ — espeja rangeIdx del QML
 let _expandedProject = '';
 let _brainLoading = false;
+let _brokerLoading = false;
 let _bodyDelegationWired = false;
 
 function makeEndpointState() { return { status: 'idle', data: null, message: '' }; }
@@ -81,6 +87,8 @@ const _stats = makeEndpointState();
 const _sessions = makeEndpointState();
 const _chats = makeEndpointState();
 const _brain = makeEndpointState();
+const _broker = makeEndpointState();
+const _brokerKnobs = makeEndpointState();
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => (
@@ -623,6 +631,153 @@ function renderCerebroTab() {
   return html;
 }
 
+// ---------- Pestaña Broker (vivo, vía broker-scan.sh + broker-knobs.sh list) ----------
+// READ-ONLY por diseño, y la pestaña lo DICE: el endpoint de axon solo invoca `scan` y `list`, nunca
+// `set`/`unset` ni arrancar/parar el servicio. Escribir la config del broker desde el navegador sería
+// mutación del host, y pararlo cerraría las terminales del usuario — esas acciones viven en el widget
+// de ESCRITORIO, que corre como el usuario dueño del .env. Es el mismo límite que esta página ya
+// declara para el self-heal/self-update del cerebro.
+
+// Orden y títulos 1:1 con `brokerGrupos`/`brokerGrupoTitulo` del QML (main.qml): las dos caras salen
+// del MISMO spec (src/widget-spec/broker-knobs.tsv), así que tampoco su lectura debe divergir.
+const BROKER_GRUPOS = [
+  ['endpoint', 'Endpoint y contrato con el cliente'],
+  ['topes', 'Topes de concurrencia'],
+  ['websocket', 'WebSocket: contrapresión y keepalive'],
+  ['http', 'Topes del HTTP'],
+  ['proceso', 'Proceso'],
+];
+
+function fmtBytes(n) {
+  if (typeof n !== 'number' || !isFinite(n) || n <= 0) return '—';
+  const u = ['B', 'KB', 'MB', 'GB'];
+  let v = n; let i = 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return (i === 0 ? Math.round(v) : v.toFixed(1)) + ' ' + u[i];
+}
+
+// El valor EFECTIVO de un knob: `actual` es lo escrito en el .env, y `null` significa "no está puesto"
+// ⇒ manda el default del código. Esa distinción se muestra, no se aplana: saber que un valor viene del
+// default es justo lo que dice si tocarlo o no.
+function knobRowHtml(k) {
+  const enDefault = k.actual == null || String(k.actual).length === 0;
+  const valor = enDefault ? k.default : k.actual;
+  const candado = k.gui === 'lee' ? '<span class="cortex-knob-lock" title="Solo lectura en toda GUI">🔒</span>' : '';
+  const marca = enDefault ? '<span class="cortex-knob-tag">default</span>' : '<span class="cortex-knob-tag set">.env</span>';
+  const reinicio = k.reinicio ? '<span class="cortex-knob-tag">requiere reinicio</span>' : '';
+  let html = '<div class="cortex-knob-row">'
+    + `<div class="cortex-knob-head"><span class="cortex-knob-label">${esc(k.etiqueta)}</span>${candado}${marca}${reinicio}</div>`
+    + `<div class="cortex-knob-value">${esc(valor == null ? '—' : valor)}</div>`
+    + `<div class="cortex-knob-env">${esc(k.env)}</div>`;
+  if (k.ayuda) html += `<div class="cortex-knob-help">${esc(k.ayuda)}</div>`;
+  if (k.advertencia) html += `<div class="cortex-knob-warn">⚠ ${esc(k.advertencia)}</div>`;
+  return html + '</div>';
+}
+
+function renderBrokerTab() {
+  let html = '<div class="hs-section-label">[ BROKER DE TERMINAL ]</div>';
+  html += '<div class="cortex-usage-caption" style="margin-bottom:12px">'
+    + 'El servicio del HOST que ejecuta los comandos de esta terminal. Vista de SOLO LECTURA — '
+    + 'arrancar/parar el servicio y editar los knobs vive en el widget de escritorio.'
+    + '</div>';
+
+  if (_broker.status !== 'ok' || !_broker.data) {
+    html += (_broker.status === 'idle' || _broker.status === 'loading')
+      ? '<div class="hoststats-loading">[ ESCANEANDO… ]</div>'
+      : emptyStateInner(stateMessage(_broker));
+    return html;
+  }
+
+  const b = _broker.data;
+  const u = b.unidad || {};
+  const ep = b.endpoint || {};
+  const tk = b.token || {};
+
+  html += '<div class="cortex-stat-grid">'
+    + statCardHtml('Servicio', u.estado || (u.activa ? 'active' : 'inactive'))
+    + statCardHtml('Al arranque', u.habilitada ? 'habilitado' : 'no')
+    + statCardHtml('Puerto TCP', ep.escuchando_tcp ? String(ep.puerto == null ? '—' : ep.puerto) : 'no escucha')
+    + statCardHtml('Socket unix', ep.socket_existe ? (ep.socket_permisos || 'sí') : 'no existe')
+    + statCardHtml('Token', tk.presente ? `${fmtInt(tk.chars)} chars` : 'ausente')
+    + statCardHtml('Memoria', fmtBytes(u.memoria_bytes))
+    + '</div>';
+
+  html += '<div class="hs-section-label">[ SERVICIO ]</div>';
+  html += '<div class="cortex-dot-list">'
+    + `<div class="cortex-dot-row"><span class="cortex-dot">●</span><span class="cortex-dot-name">${esc(u.nombre || '—')}</span></div>`
+    + (u.desde ? `<div class="cortex-dot-row"><span class="cortex-dot">●</span><span class="cortex-dot-name">activo desde ${esc(u.desde)}</span></div>` : '')
+    + `<div class="cortex-dot-row"><span class="cortex-dot">●</span><span class="cortex-dot-name">reinicios: ${esc(u.reinicios == null ? '—' : u.reinicios)}${u.pid ? ' · pid ' + esc(u.pid) : ''}</span></div>`
+    + '</div>';
+
+  // El socket unix es EL transporte del cliente contenerizado: esta misma página habla con el broker
+  // por ahí, así que su ausencia no es un detalle cosmético.
+  html += '<div class="hs-section-label">[ ENDPOINT ]</div>';
+  html += '<div class="cortex-dot-list">'
+    + `<div class="cortex-dot-row"><span class="cortex-dot">●</span><span class="cortex-dot-name">${esc(ep.socket || '—')}${ep.socket_dueno ? ' · ' + esc(ep.socket_dueno) : ''}</span></div>`
+    + `<div class="cortex-dot-row"><span class="cortex-dot">●</span><span class="cortex-dot-name">token en ${esc(tk.archivo || '—')}</span></div>`
+    + '</div>';
+
+  if (_brokerKnobs.status === 'ok' && _brokerKnobs.data && Array.isArray(_brokerKnobs.data.knobs)) {
+    const knobs = _brokerKnobs.data.knobs;
+    html += `<div class="hs-section-label">[ KNOBS · ${esc(_brokerKnobs.data.archivo || '')} ]</div>`;
+    for (const [grupo, titulo] of BROKER_GRUPOS) {
+      const del = knobs.filter((k) => k && k.grupo === grupo);
+      if (!del.length) continue;
+      html += `<div class="cortex-knob-group">${esc(titulo)}</div>`;
+      html += del.map(knobRowHtml).join('');
+    }
+  } else if (_brokerKnobs.status === 'error' || _brokerKnobs.status === 'degraded') {
+    html += '<div class="hs-section-label">[ KNOBS ]</div>' + emptyStateInner(stateMessage(_brokerKnobs));
+  }
+
+  return html;
+}
+
+// UNA sola llamada trae las dos mitades (`?knobs=1`): el endpoint devuelve el scan en la raíz y el spec
+// de knobs colgado en `knobs`, cada mitad con su propio ok/reason — una puede fallar sin la otra.
+async function refreshBroker() {
+  try {
+    const payload = await fetchJson(ENDPOINTS.broker);
+    if (!payload || payload.ok !== true) {
+      _broker.status = 'degraded';
+      _broker.data = null;
+      _broker.message = (payload && (REASON_TEXT[payload.reason] || payload.detail)) || 'sin datos';
+    } else {
+      _broker.status = 'ok';
+      _broker.data = payload.data;
+      _broker.message = '';
+    }
+    const kn = payload && payload.knobs;
+    if (kn && kn.ok === true) {
+      _brokerKnobs.status = 'ok';
+      _brokerKnobs.data = kn.data;
+      _brokerKnobs.message = '';
+    } else {
+      _brokerKnobs.status = 'degraded';
+      _brokerKnobs.data = null;
+      _brokerKnobs.message = (kn && (REASON_TEXT[kn.reason] || kn.detail)) || 'sin datos';
+    }
+  } catch (e) {
+    _broker.status = 'error';
+    _broker.data = null;
+    _broker.message = (e && e.message) || 'cortex monitor unreachable';
+    _brokerKnobs.status = 'error';
+    _brokerKnobs.data = null;
+    _brokerKnobs.message = _broker.message;
+  }
+}
+
+function loadBrokerAndRender() {
+  _broker.status = _broker.status === 'idle' ? 'loading' : _broker.status;
+  if (_activeTab === 'broker') renderActiveTab();
+  if (_brokerLoading) return;
+  _brokerLoading = true;
+  refreshBroker().then(() => {
+    _brokerLoading = false;
+    if (_activeTab === 'broker') renderActiveTab();
+  });
+}
+
 // ---------- Dispatch de render + rail ----------
 function renderActiveTab() {
   const body = $('cortex-body');
@@ -634,6 +789,7 @@ function renderActiveTab() {
     case 'proyectos': html = renderProyectosTab(); break;
     case 'chats': html = renderChatsTab(); break;
     case 'cerebro': html = renderCerebroTab(); break;
+    case 'broker': html = renderBrokerTab(); break;
     default: html = renderLimitesTab(); break;
   }
   body.innerHTML = html;
@@ -676,6 +832,7 @@ function selectTab(tab) {
   _activeTab = tab;
   setActiveRailButton(tab);
   if (tab === 'cerebro') loadBrainAndRender();
+  else if (tab === 'broker') loadBrokerAndRender();
   else renderActiveTab();
 }
 
