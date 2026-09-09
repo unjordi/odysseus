@@ -9,7 +9,7 @@
       "estado": "active",
       "desde": "Wed 2026-09-09 09:01:30 CST",
       "pid": 12345,
-      "memoria_bytes": 53477376,
+      "memoria_bytes": 53612544,
       "memoria_pico_bytes": 69439488,
       "reinicios": 0
     },
@@ -219,6 +219,28 @@
         "ayuda": "Cuánto se espera a que una petición NO-upgradeada termine.",
         "advertencia": null,
         "actual": null
+      }
+    ],
+    "grupos": [
+      {
+        "clave": "endpoint",
+        "titulo": "Endpoint y contrato con el cliente"
+      },
+      {
+        "clave": "topes",
+        "titulo": "Topes de concurrencia"
+      },
+      {
+        "clave": "websocket",
+        "titulo": "WebSocket: contrapresión y keepalive"
+      },
+      {
+        "clave": "http",
+        "titulo": "Topes del HTTP"
+      },
+      {
+        "clave": "proceso",
+        "titulo": "Proceso"
       }
     ]
   }

@@ -55,6 +55,7 @@ const MUTACIONES = {
   2: ['Vista de SOLO LECTURA', 'Vista'],                     // se cae el aviso de solo lectura
   3: ['`${fmtInt(tk.chars)} chars`', 'String(tk.chars)'],    // el token deja de reportarse por longitud
   4: ["_broker.reason === 'sin-vista-del-host'", 'false'],   // sin-vista deja de degradar con gracia
+  5: ['_brokerKnobs.data.grupos) && _brokerKnobs.data.grupos.length', 'false'],  // deja de leer grupos del endpoint
 };
 
 function cargarWidget() {
@@ -133,16 +134,27 @@ test('los 12 knobs del spec salen todos, y los gui=lee con candado', () => {
   assert.equal(candados, knobs.filter((k) => k.gui === 'lee').length);
 });
 
-test('los grupos se rotulan en el mismo orden que el QML de cortex', () => {
+test('los grupos se rotulan en el ORDEN y con los TÍTULOS que emite el endpoint (#148)', () => {
   const html = conDatos();
-  const titulos = ['Endpoint y contrato con el cliente', 'Topes de concurrencia',
-                   'WebSocket: contrapresión y keepalive', 'Topes del HTTP', 'Proceso'];
+  // Los títulos ESPERADOS salen del fixture (= lo que emite el spec de cortex), no de una constante en
+  // el cliente: eso es justo lo que #148 elimina. Si cortex cambia un título, este test lo sigue.
+  const titulos = FIX.knobs.grupos.map((g) => g.titulo);
+  assert.ok(titulos.length >= 5);
   let pos = -1;
   for (const t of titulos) {
     const i = html.indexOf(t);
     assert.ok(i > pos, `el grupo "${t}" falta o está fuera de orden`);
     pos = i;
   }
+});
+
+test('si el endpoint NO trae grupos (broker viejo), no se queda en blanco: cae a los grupos de los knobs', async () => {
+  // Un backend atrás no emite `grupos`. El render no debe perder la lista de knobs — cae a los grupos
+  // que traen los propios knobs (sin título bonito, pero completos).
+  const knobsSinGrupos = { archivo: FIX.knobs.archivo, knobs: FIX.knobs.knobs };  // sin `grupos`
+  await conRespuesta({ ok: true, data: FIX.scan, knobs: { ok: true, data: knobsSinGrupos }, sondeo: { mode: 'host', configured: true, reachable: true } });
+  const html = W.renderBrokerTab();
+  for (const k of FIX.knobs.knobs) assert.ok(html.includes(k.env), `falta el knob ${k.env} en el fallback`);
 });
 
 test('la advertencia de un knob peligroso se muestra junto a él', () => {
@@ -198,5 +210,7 @@ test('el fixture sigue teniendo la forma que emiten los helpers reales', { skip:
   assert.deepEqual(Object.keys(scan.endpoint).sort(), Object.keys(FIX.scan.endpoint).sort());
   assert.deepEqual(Object.keys(scan.unidad).sort(), Object.keys(FIX.scan.unidad).sort());
   assert.deepEqual(knobs.knobs.map((k) => k.env).sort(), FIX.knobs.knobs.map((k) => k.env).sort());
+  assert.ok(Array.isArray(knobs.grupos) && knobs.grupos.length >= 5, 'el helper real emite `grupos`');
+  assert.deepEqual(Object.keys(knobs.grupos[0]).sort(), ['clave', 'titulo']);
   assert.deepEqual(Object.keys(knobs.knobs[0]).sort(), Object.keys(FIX.knobs.knobs[0]).sort());
 });
