@@ -289,3 +289,24 @@ def test_lo_inequivoco_no_necesita_contexto():
 def test_siguen_frenados_el_verbo_comido_y_pasa_el_tartamudeo():
     assert not _acepta("necesito revisar el worktree", "revisar el worktree")
     assert _acepta("el el commit", "el commit")
+
+
+# ── M-6: el breaker vuelve a media asta al vencer el cooldown ───────────────────
+# El contador no se reiniciaba, así que el PRIMER fallo tras el cooldown re-pausaba
+# (el límite dejaba de significar lo que dice) y el log informaba rachas inventadas.
+
+def test_el_breaker_exige_otra_racha_completa_tras_el_cooldown():
+    from services.stt import transcript_cleaner as tc
+    tc.reset_llm_circuit()
+    tc._note_llm_failure("probe")
+    tc._note_llm_failure("probe")          # alcanza el límite ⇒ pausa
+    assert not tc._llm_available()
+    import time as _t
+    tc._llm_disabled_until = _t.monotonic() - 1   # el cooldown VENCIÓ (en el pasado, no "nunca hubo")
+    assert tc._llm_available()
+    assert tc._llm_consecutive_failures == 0
+    tc._note_llm_failure("probe")          # UN solo fallo NO debe re-pausar
+    assert tc._llm_available()
+    tc._note_llm_failure("probe")          # el segundo sí
+    assert not tc._llm_available()
+    tc.reset_llm_circuit()

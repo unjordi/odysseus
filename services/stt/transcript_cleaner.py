@@ -62,6 +62,10 @@ _LLM_FAILURE_LIMIT = 2
 _LLM_COOLDOWN_S = 300.0
 _llm_consecutive_failures = 0
 _llm_disabled_until = 0.0
+# NOTA de alcance: estos contadores son GLOBALES del módulo. Con un solo dueño da igual, pero en el
+# modelo multi-tenant que se decidió para el agente de máquina (#26i: una máquina por usuario), el ollama
+# caído de UNA persona pausaría el limpiador de TODAS. Cuando eso se construya, el breaker se llavea por
+# vínculo — no se arregla aquí a ciegas, porque la clave sale de ese diseño.
 
 
 # ── Carril 1: determinista ──
@@ -501,7 +505,24 @@ def _ollama_base_url() -> str:
 
 
 def _llm_available() -> bool:
-    return time.monotonic() >= _llm_disabled_until
+    """¿Se puede intentar el carril LLM ahora?
+
+    Al VENCER el cooldown se vuelve a media asta explícitamente: el contador se pone a cero, de modo que
+    hace falta otra racha completa de `_LLM_FAILURE_LIMIT` para volver a pausar. Antes no se reiniciaba, y
+    eso tenía dos efectos feos: el PRIMER fallo tras el cooldown re-pausaba de inmediato (el límite dejaba
+    de significar lo que dice) y el contador crecía sin techo entre episodios, así que el log informaba
+    "tras 7 fallos seguidos" cuando en realidad había habido uno. (M-6)
+    """
+    global _llm_consecutive_failures, _llm_disabled_until
+    if _llm_disabled_until:
+        if time.monotonic() < _llm_disabled_until:
+            return False
+        # TRANSICIÓN: el cooldown acaba de vencer. Se reinicia UNA vez —aquí, no en cada consulta— porque
+        # reiniciar en cada llamada impediría que los fallos se acumulen y el breaker nunca volvería a
+        # dispararse.
+        _llm_disabled_until = 0.0
+        _llm_consecutive_failures = 0
+    return True
 
 
 def _note_llm_failure(reason: str) -> None:
