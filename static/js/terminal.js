@@ -15,8 +15,15 @@
 // se conservan en ambos modos.
 //
 // GEOMETRÍA: las decisiones que se rompieron en producción viven PURAS en `./term-geometry.js`, para poder
-// probarlas sin navegador (`scratch/pty-frontend/probe-term-ui.mjs`): cuántas cols/rows caben en el área
-// visible (`computeGrid`) y qué tamaño mandarle al PTY y cuándo (`createPtySizeReconciler`).
+// probarlas sin navegador (`node scratch/pty-frontend/probe-term-ui.mjs`, exit 0 = verde): cuántas cols/rows
+// caben en el área visible (`computeGrid`) y qué tamaño mandarle al PTY y cuándo (`createPtySizeReconciler`).
+//
+// ANCHO DE COLUMNA — LO QUE SE PINTA MANDA, NO LO QUE XTERM CREE: `dimensions.css.cell.width` puede NO ser el
+// paso con el que el navegador pinta. xterm mide el glifo en un contenedor oculto y cuadra la diferencia con
+// un `letter-spacing` inline en `.xterm-rows`; si algo HEREDADO contamina esa medición, cada columna se pinta
+// más ancha y el error se acumula hasta que el `overflow: hidden` del contenedor recorta las últimas
+// columnas. El CSS corta la herencia (`#term-xterm .xterm { letter-spacing: normal }`) y aquí se MIDE el paso
+// real (`_measurePaintedCellWidth`) como red — ver ambos comentarios.
 //
 // TAMAÑO DEL PTY — RECONCILIAR, NO NOTIFICAR: el shell debe creer EXACTAMENTE el tamaño que xterm rendea.
 // Avisarle "cuando pase un evento" no alcanza (el PTY nace con las dims de la URL del WS, los resize
@@ -241,6 +248,74 @@ function _ensureTerm() {
   return term;
 }
 
+/** Cuántas 'W' mide el probe de paso real: suficientes para que el redondeo del rect no pese, y baratas. */
+const _PITCH_PROBE_LEN = 64;
+
+/**
+ * Paso HORIZONTAL con el que el navegador PINTA una columna: avance del glifo + el `letter-spacing` que el
+ * DOM-renderer de xterm le pone INLINE a `.xterm-rows`. En px CSS; 0 si aún no es medible.
+ *
+ * POR QUÉ NO BASTA `dimensions.css.cell.width`: ese es lo que xterm CREE que mide una celda. xterm lo deriva
+ * de su propia medición del glifo y luego "cuadra" la diferencia poniéndole `letter-spacing` a las filas
+ * (`_setDefaultSpacing`: `cellWidth − widthCache('W')`). Si su medición estaba sesgada — p. ej. porque un
+ * `letter-spacing` HEREDADO contaminó el contenedor oculto con el que mide —, ese ajuste inline SUSTITUYE al
+ * heredado en vez de sumarse y cada columna se pinta más ancha que `cellWidth`. El error es por columna, así
+ * que se ACUMULA: medido el 2026-09-08 en Chrome, 8 px declarados contra 8.21875 px pintados = ~20 px a 90
+ * columnas, justo las ~2 celdas que el `overflow: hidden` del contenedor recortaba. El CSS ya neutraliza esa
+ * herencia (`#term-xterm .xterm { letter-spacing: normal }`); esta medición es la RED: mide lo que de verdad
+ * se pinta, venga el desajuste de donde venga (una fuente que carga tarde, otro estilo heredado mañana).
+ *
+ * El probe se cuelga del PADRE de `.xterm-rows` (`.xterm-screen`), NUNCA de `.xterm-rows`: sus hijos los
+ * indexa el renderer por posición y meterle uno propio le rompería el mapeo de filas. Copia las propiedades
+ * de texto computadas de las filas —no hereda—, así mide exactamente el mismo paso que ellas.
+ */
+function _measurePaintedCellWidth() {
+  try {
+    const rowsEl = _term && _term.element ? _term.element.querySelector('.xterm-rows') : null;
+    if (!rowsEl || !rowsEl.parentNode) return 0;
+    const cs = getComputedStyle(rowsEl);
+    const probe = document.createElement('span');
+    probe.setAttribute('aria-hidden', 'true');
+    probe.style.cssText = 'position:absolute;top:0;left:-9999em;visibility:hidden;pointer-events:none;white-space:pre;line-height:normal';
+    probe.style.fontFamily = cs.fontFamily;
+    probe.style.fontSize = cs.fontSize;
+    probe.style.fontWeight = cs.fontWeight;
+    probe.style.fontStyle = cs.fontStyle;
+    probe.style.fontKerning = cs.fontKerning;
+    probe.style.letterSpacing = cs.letterSpacing;
+    probe.style.wordSpacing = cs.wordSpacing;
+    probe.textContent = 'W'.repeat(_PITCH_PROBE_LEN);
+    rowsEl.parentNode.appendChild(probe);
+    let width = 0;
+    try { width = probe.getBoundingClientRect().width / _PITCH_PROBE_LEN; } finally { probe.remove(); }
+    return isFinite(width) && width > 0 ? width : 0;
+  } catch { return 0; }
+}
+
+/**
+ * Vuelve a alinear la métrica INTERNA de xterm con lo que se pinta, cuando se detecta que divergieron.
+ *
+ * Que la rejilla no se recorte lo resuelve solo `computeGrid` (divide entre el paso mayor), pero eso deja a
+ * xterm creyendo un ancho de celda que no es el pintado, y con ESA creencia posiciona lo que dibuja por
+ * coordenadas de celda —el rectángulo de selección y el mapeo de un clic a columna—, que quedarían corridos
+ * a la derecha. `handleCharSizeChanged()` del render service es lo que limpia el `WidthCache` del
+ * DOM-renderer y recalcula el `letter-spacing` de las filas, así que la divergencia se CIERRA en vez de solo
+ * compensarse. Es API interna del bundle: todo va en try/catch y si no existe, la red de `computeGrid` sigue
+ * sosteniendo el caso.
+ */
+function _resyncCharMetrics() {
+  try {
+    const core = _term && _term._core;
+    if (!core) return false;
+    if (core._charSizeService && typeof core._charSizeService.measure === 'function') core._charSizeService.measure();
+    if (core._renderService && typeof core._renderService.handleCharSizeChanged === 'function') {
+      core._renderService.handleCharSizeChanged();
+      return true;
+    }
+  } catch { /* bundle sin esa API: queda la red de computeGrid */ }
+  return false;
+}
+
 /**
  * Mide el área REALMENTE visible del contenedor + la métrica de celda vigente. Devuelve null si algo aún no
  * es medible (contenedor sin layout, o fuente sin medir) — en ese caso NO se resizea.
@@ -280,6 +355,9 @@ function _measureGrid() {
     padBottom: parseFloat(cs.paddingBottom) || 0,
     cellWidth: cell.width,
     cellHeight: cell.height,
+    // Lo que xterm CREE que mide una celda (`cell.width`) vs lo que el navegador PINTA. Cuando difieren, el
+    // segundo es el que decide si la última columna cabe — ver `_measurePaintedCellWidth`.
+    paintedCellWidth: _measurePaintedCellWidth(),
     scrollbarWidth,
     // El margen derecho lo hace el CARRIL de la scrollbar (el CSS deja `padding-right: 0` justo para que
     // carril y padding no se sumen y se coman una columna). Donde la plataforma usa scrollbars OVERLAY el
@@ -296,8 +374,16 @@ function _measureGrid() {
  */
 function _fitNow() {
   if (!_term) return;
+  let resynced = false;
   for (let i = 0; i < 3; i++) {
-    const grid = computeGrid(_measureGrid());
+    let m = _measureGrid();
+    // Si lo pintado y lo declarado no coinciden, primero se intenta CERRAR la divergencia (una sola vez por
+    // pasada, para no rebotar) y se vuelve a medir; lo que quede lo absorbe `computeGrid` con el paso mayor.
+    if (m && !resynced && m.paintedCellWidth > 0 && Math.abs(m.paintedCellWidth - m.cellWidth) > 0.01) {
+      resynced = true;
+      if (_resyncCharMetrics()) m = _measureGrid();
+    }
+    const grid = computeGrid(m);
     if (!grid) break;                                            // aún no medible: no resizeamos…
     if (grid.cols === _term.cols && grid.rows === _term.rows) break;
     try { _term.resize(grid.cols, grid.rows); } catch { break; }
