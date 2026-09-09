@@ -354,6 +354,107 @@ const _ENUM_LABELS = {
   modo: { build: 'build — todas las tools', plan: 'plan — solo lectura' },
 };
 
+/* ── MODOS DE RUTEO (eje ORTOGONAL al modelo) ──
+ * Los 4 modos de axon (src/router/routing-mode.ts → ROUTING_MODES / ROUTING_MODE_DOCS).
+ * Son un eje SEPARADO del modelo: el modelo es QUÉ piensa, el modo es QUÉ CARRIL
+ * (local / frontera) decide cada paso. El endpoint /api/axon/config aún no los emite
+ * (ver DIAGNOSTICO-modos-picker.md); cuando lo haga, este selector los pinta solo.
+ * Descripciones espejo de ROUTING_MODE_DOCS (what + when) para no duplicar la fuente.
+ */
+const ROUTING_MODES = ['local-first', 'local-only', 'frontier-first', 'frontier-only'];
+const ROUTING_MODE_DOCS = {
+  'local-first': {
+    label: 'local-first',
+    what: 'local decide cada paso y ESCALA a frontera solo cuando el local no puede (NO_JSON, stuck, stagnation, maxturns). Es el DEFAULT.',
+    when: 'el día a día: barato por defecto, con la frontera como TOPE de la escalera y no como piso.',
+  },
+  'local-only': {
+    label: 'local-only',
+    what: 'local PURO: $0, sin escalado. Los pasos difíciles NO se van a frontera — se resuelven local o no se resuelven.',
+    when: 'quieres costo CERO garantizado, o estás midiendo qué aguanta el carril local sin muletas.',
+  },
+  'frontier-first': {
+    label: 'frontier-first',
+    what: 'HÍBRIDO POR FASE: la frontera DELIBERA (los primeros turnos: el juicio, el plan) y el local EJECUTA los turnos mecánicos que siguen. Si la frontera se cae, la corrida SIGUE EN LOCAL (incluido el plan).',
+    when: 'la tarea necesita buen juicio al arrancar pero su ejecución es mecánica — gastas lo caro donde rinde y abaratas el resto.',
+  },
+  'frontier-only': {
+    label: 'frontier-only',
+    what: 'frontera PURA, sin local en ningún paso. Si la frontera NO está disponible (sin credencial, sin saldo, ventana agotada, red caída), la corrida FALLA con estado `lane-down` — NUNCA cae a local.',
+    when: 'necesitas la calidad de la frontera de punta a punta y prefieres un fallo explícito antes que un resultado degradado en silencio.',
+  },
+};
+
+// ¿El snapshot ya publica los modos de ruteo? (campo `routingModes` del endpoint,
+// o un knob `ruteo`/`routingMode` en el schema). Hoy NO: por eso este selector
+// degrada a solo-lectura hasta que axon lo emita (ver DIAGNOSTICO-modos-picker.md).
+function routingModesFromSnap(snap) {
+  if (snap && Array.isArray(snap.routingModes) && snap.routingModes.length) {
+    return snap.routingModes.map(m => (typeof m === 'string' ? m : m.mode));
+  }
+  const knobs = (snap && snap.schema && Array.isArray(snap.schema.knobs)) ? snap.schema.knobs : [];
+  const rk = knobs.find(k => k.key === 'ruteo' || k.key === 'routingMode');
+  if (rk && Array.isArray(rk.options) && rk.options.length) return rk.options.map(String);
+  return null;
+}
+
+// El selector de MODO de ruteo: un <select> con los 4 modos + su descripción
+// (what · when) como <option> y como <datalist>-style ayuda bajo el control.
+// Si el endpoint aún no lo emite, se pinta DESHABILITADO con una nota honesta
+// (no un "aplicado" mentiroso): el modo real lo sigue mandando el despliegue.
+function ctlRuteo(snap) {
+  const modes = routingModesFromSnap(snap) || ROUTING_MODES;
+  const published = routingModesFromSnap(snap) != null;
+  const current = (snap && (snap.routingMode || (snap.effective && (snap.effective.ruteo || snap.effective.routingMode)))) || '';
+  const cur = (current && typeof current === 'object') ? current.value : current;
+
+  const sel = elt('select', 'settings-select axoncfg-input');
+  sel.id = 'axoncfg-f-ruteo';
+  const none = elt('option', null, '(sin definir — manda el default del despliegue)');
+  none.value = '';
+  sel.appendChild(none);
+  for (const m of modes) {
+    const doc = ROUTING_MODE_DOCS[m] || { label: m, what: '', when: '' };
+    const o = elt('option', null, doc.label + (doc.what ? ' — ' + doc.what : ''));
+    o.value = m;
+    o.title = doc.when || '';
+    if (m === cur) o.selected = true;
+    sel.appendChild(o);
+  }
+  if (!published) {
+    sel.disabled = true;
+    sel.classList.add('axoncfg-readonly');
+  }
+
+  const wrap = elt('div', 'axoncfg-knob-ctl');
+  wrap.appendChild(sel);
+  if (!published) {
+    wrap.appendChild(elt('div', 'axoncfg-knob-help admin-toggle-sub',
+      'Este axon todavía no publica los modos de ruteo en /api/axon/config — el selector queda de solo lectura. ' +
+      'El modo real lo fija el despliegue (env AXON_ROUTE / flag --local-only, --frontier-first, --frontier-only). ' +
+      'Ver DIAGNOSTICO-modos-picker.md.'));
+  }
+  return wrap;
+}
+
+// Perilla sintética de MODO de ruteo para el grupo "Cerebro y ruteo": se pinta
+// con ctlRuteo (no con la fábrica genérica) y se marca hot SOLO si el endpoint
+// ya la emite escribible; si no, queda de solo lectura (no mentimos con "aplicado").
+function routingKnob(snap) {
+  const published = routingModesFromSnap(snap) != null;
+  return {
+    key: 'ruteo',
+    kind: 'enum',
+    group: 'cerebro',
+    label: 'Modo de ruteo (carril local / frontera)',
+    help: 'Qué CARRIL decide cada paso — eje ortogonal al modelo. local-first escala a frontera; local-only es $0 puro; frontier-first deliberación en frontera + ejecución local; frontier-only es frontera pura (falla si no hay).',
+    scope: 'usuario',
+    hot: published,
+    advanced: false,
+    options: ROUTING_MODES,
+  };
+}
+
 function buildControl(knob) {
   const current = shownValue(knob);
 
@@ -641,12 +742,35 @@ function renderPanel() {
 
   for (const g of groups) {
     const knobs = byGroup.get(g.id) || [];
-    if (!knobs.length) continue;
+    if (!knobs.length && g.id !== 'cerebro') continue;
 
     const sec = elt('section', 'admin-card axoncfg-group');
     sec.dataset.group = g.id;
     sec.appendChild(elt('h2', null, g.label || g.id));
     if (g.help) sec.appendChild(elt('div', 'admin-toggle-sub', g.help));
+
+    // El MODO de RUTEO es un eje ortogonal al modelo: se pinta SIEMPRE junto al
+    // grupo "Cerebro y ruteo" (o al primer grupo si no existe), con su selector
+    // propio. Si el endpoint aún no lo emite, ctlRuteo lo deja de solo lectura.
+    if (g.id === 'cerebro' || (g.id === groups[0].id && !groups.some(x => x.id === 'cerebro'))) {
+      const rk = routingKnob(_snap);
+      const rrow = elt('div', 'axoncfg-knob');
+      rrow.dataset.key = 'ruteo';
+      rrow.dataset.advanced = '0';
+      rrow.dataset.haystack = ['modo de ruteo', 'ruteo', 'routing', 'local-first', 'local-only', 'frontier-first', 'frontier-only', rk.help || ''].join(' ').toLowerCase();
+      const rhead = elt('div', 'axoncfg-knob-head');
+      const rlbl = elt('label', 'axoncfg-knob-label', rk.label);
+      rlbl.htmlFor = 'axoncfg-f-ruteo';
+      rhead.appendChild(rlbl);
+      rhead.appendChild(chip(routingModesFromSnap(_snap) != null ? 'en caliente' : 'despliegue',
+        routingModesFromSnap(_snap) != null ? 'axoncfg-chip-hot' : 'axoncfg-chip-ro',
+        routingModesFromSnap(_snap) != null
+          ? 'Se aplica al instante, sin reiniciar axon.'
+          : 'Solo lectura: axon aún no lo emite escribible (ver DIAGNOSTICO-modos-picker.md).'));
+      rrow.appendChild(rhead);
+      rrow.appendChild(ctlRuteo(_snap));
+      sec.appendChild(rrow);
+    }
 
     const basic = knobs.filter(k => !k.advanced);
     const advanced = knobs.filter(k => k.advanced);
