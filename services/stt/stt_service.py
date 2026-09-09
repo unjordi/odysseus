@@ -22,6 +22,14 @@ from src.constants import (
     DEFAULT_STT_LANGUAGE,
     DEFAULT_STT_INITIAL_PROMPT,
 )
+from services.stt.transcript_cleaner import (
+    DEFAULT_CLEAN_ENABLED,
+    DEFAULT_CLEAN_LLM_ENABLED,
+    DEFAULT_CLEAN_LLM_MODEL,
+    DEFAULT_CLEAN_LLM_TIMEOUT_MS,
+    clean_transcript,
+    record_edit_pair,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,41 +45,77 @@ logger = logging.getLogger(__name__)
 # configurable value well under any pathological input.
 MAX_INITIAL_PROMPT_CHARS = 1000
 
-# VAD defaults (Silero, bundled with faster-whisper). speech_pad is generous on
-# purpose: a tight pad eats the start of the sentence, which is exactly where
-# Whisper loses the thread and starts inventing.
+# ── VAD (Silero) — LA palanca, con un orden de magnitud de diferencia ──
+#
+# Barański et al., ICASSP 2025 (arXiv 2501.11378), Tabla VII: sobre 301,317
+# archivos de no-habla con large-v3, encender SileroVAD lleva el WER de 104.8% a
+# 8.0% y la tasa de alucinación de 21.3% a 0.2%. Ninguna otra intervención se le
+# acerca (hallucination_silence_threshold=20 → 39.8%; WebRTC VAD → 68.3%;
+# beam_size=1 → 107.2%, PEOR que no hacer nada). [MEDIDO]
+#
+# Los defaults de faster-whisper están calibrados para audio largo tipo podcast,
+# no para dictado push-to-talk de 2–30 s:
+#   · min_silence_duration_ms: fw default 2000. Dos segundos de silencio no
+#     ocurren dentro de un dictado corto, así que el VAD nunca cerraría un chunk
+#     y la cola con ruido bajo llega entera al decoder → 300.
+#   · min_speech_duration_ms: fw default 0, o sea que un clic, una respiración o
+#     un golpe de mesa de 40 ms CUENTA como voz, pasa al decoder, y el decoder
+#     rellena ese "habla" con lo más probable de su corpus: la despedida de
+#     YouTube. Es exactamente la vía por la que entra el "¡Gracias!" → 150.
+#   · speech_pad_ms: aquí nos SEPARAMOS de la recomendación publicada (200) y
+#     conservamos 400 a propósito. El 200 del estudio es [INFERIDO] —el paper
+#     mide VAD sí/no, no barre parámetros—, mientras que nuestro 400 salió de un
+#     fallo REAL observado el 2026-09-06: con el pad corto se comía el arranque
+#     de la frase, que es justo donde Whisper pierde el hilo y empieza a
+#     inventar. Evidencia local medida > recomendación inferida.
+#
+# El 250 de min_speech_duration_ms NO es un número inventado: es el que usa una
+# app de dictado en producción con Silero v5.1.2. Su juego completo es
+# threshold=0.50 · min_speech=250 · min_silence=100 · speech_pad=30. Adoptamos el
+# min_speech tal cual (no teníamos contra-evidencia local y ataca justo el blip
+# que se vuelve "¡Gracias!"), pero NO el par min_silence=100 / speech_pad=30:
+# ésos son un conjunto coherente entre sí —cortar agresivo con padding mínimo— y
+# mezclarlos con nuestro pad de 400 daría una combinación que nadie ha probado.
+# Cambiarlos exige medirlos dictando; queda anotado como el A/B siguiente.
 DEFAULT_VAD_MIN_SILENCE_MS = 300
 DEFAULT_VAD_SPEECH_PAD_MS = 400
+DEFAULT_VAD_MIN_SPEECH_MS = 250
 
-# ── Anti-hallucination on silence ──
+# ── Umbrales del decoder: se dejan en su DEFAULT, y eso es una decisión ──
 #
-# Whisper's documented failure mode: fed audio with no speech, the decoder
-# fills in the most frequent sequences of its training corpus (YouTube
-# subtitles) and loops — "¡Gracias por ver el video!", "¡Suscríbete al canal!",
-# "activa la campanita" — or echoes its own initial_prompt. Observed live on
-# 2026-09-07 with a mic left open by accident.
+# Se dejan clavados aquí (no se heredan en silencio) para que un cambio de
+# default upstream no nos mueva el piso sin que nadie se entere — pero los
+# valores son EXACTAMENTE los de faster-whisper, y NO se tunean. La razón:
 #
-# Defense in depth, because no single knob covers it:
-#   1. vad_filter          — non-speech never reaches the decoder (primary).
-#   2. no_speech_threshold — segments the model itself flags as silence are
-#                            skipped (works together with log_prob_threshold).
-#   3. temperature ladder  — thresholds below only *trigger a retry*; with a
-#                            single temperature there is nothing to fall back
-#                            to, so they are inert. The ladder is what makes
-#                            compression_ratio_threshold able to reject
-#                            degenerate output. First pass is still greedy
-#                            (0.0), so a clean clip decodes deterministically.
-#   4. compression_ratio_threshold — catches repetition loops (a looped
-#                            transcript compresses far better than speech).
-#   5. condition_on_previous_text=False — stops a loop from being carried into
-#                            the next window.
-#   6. filter_degenerate_text() — our own last line: whatever still gets
-#                            through (a prompt echo, a repeated stock phrase)
-#                            is dropped before it reaches the composer.
+# Radford et al. §4.5 reporta haberlos ajustado él mismo a 0.6 / −1.0 / 2.4
+# [OFICIAL]. Y —esto es lo decisivo para el "¡Gracias!"— son estructuralmente
+# INCAPACES de atraparlo: la compuerta de no-habla exige que P(<|nospeech|>)
+# supere 0.6 **Y** que el decoding haya fallado por log_prob_threshold. Una
+# alucinación corta y CONFIADA como "Gracias." tiene log-prob alta y ratio de
+# compresión bajo, así que pasa las tres compuertas. Caso reportado con
+# no_speech_prob de 0.877 y 0.977 devolviendo igual subtítulos inventados:
+# https://github.com/SYSTRAN/faster-whisper/issues/621
+#
+# → Tunearlos es el camino equivocado para este fallo. La solución es el VAD de
+#   arriba (pre-decoder) + la bag-of-hallucinations de filter_degenerate_text
+#   (post-decoder). Juntos: 0.0% de alucinación y mejor WER que cualquiera solo
+#   (Tabla VII: VAD 8.0% / post-filtro 17.1% / los dos 6.5%). [MEDIDO]
+#
+# La escalera de temperatura sí se mantiene: sin más de una temperatura los
+# umbrales no tienen a qué reintentar y quedan inertes. El primer paso sigue
+# siendo greedy (0.0), así que un clip limpio decodifica determinista.
 DEFAULT_NO_SPEECH_THRESHOLD = 0.6
 DEFAULT_LOG_PROB_THRESHOLD = -1.0
 DEFAULT_COMPRESSION_RATIO_THRESHOLD = 2.4
 DEFAULT_TEMPERATURE_LADDER = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
+
+# hallucination_silence_threshold se queda en None A PROPÓSITO: en faster-whisper
+# exige word_timestamps=True (es código muerto sin él — transcribe.py:1277/1293) y
+# salta silencios MÁS LARGOS que el umbral. Barański lo mide con umbral 20 s:
+# alucinación 21.3% → 14.7%, muy por debajo del VAD. En clips de dictado de 2–30 s
+# un umbral así casi nunca dispara, y word_timestamps cuesta latencia en un camino
+# interactivo. [MEDIDO + INFERIDO]
+DEFAULT_HALLUCINATION_SILENCE_THRESHOLD = None
 
 # Whisper model sizes accepted for the per-request model override. WhisperModel
 # treats any unknown string as a HuggingFace repo id and will happily download
@@ -169,9 +213,15 @@ _CLOSING_HALLUCINATIONS = frozenset({
     "activa la campanita",
     "hasta la proxima",
     "nos vemos en el proximo video",
+    "nos vemos",
+    "nos vemos pronto",
     "adios",
     "subtitulos realizados por la comunidad de amara org",
     "subtitulado por la comunidad de amara org",
+    "mas informacion en www carrefour es",
+    "gracias por ver este video",
+    "gracias por acompanarnos",
+    "un saludo",
 })
 
 
@@ -348,6 +398,13 @@ def build_local_transcribe_kwargs(
             "speech_pad_ms": _as_int(
                 settings.get("stt_vad_speech_pad_ms"), DEFAULT_VAD_SPEECH_PAD_MS, 0, 5000
             ),
+            # Descarta clics, respiraciones y golpes sueltos ANTES del decoder:
+            # con el default 0 de faster-whisper, un blip de 40 ms cuenta como
+            # voz y el decoder lo rellena con la despedida de subtítulos. Ver la
+            # nota de VAD arriba.
+            "min_speech_duration_ms": _as_int(
+                settings.get("stt_vad_min_speech_ms"), DEFAULT_VAD_MIN_SPEECH_MS, 0, 5000
+            ),
         }
         # Silero's speech probability threshold. Left unset by default so the
         # library default (0.5) applies; lower it if a quiet phone mic gets its
@@ -398,6 +455,13 @@ class STTService:
             "stt_vad_speech_pad_ms": saved.get("stt_vad_speech_pad_ms", DEFAULT_VAD_SPEECH_PAD_MS),
             "stt_vad_threshold": saved.get("stt_vad_threshold", ""),
             "stt_no_speech_threshold": saved.get("stt_no_speech_threshold", DEFAULT_NO_SPEECH_THRESHOLD),
+            "stt_vad_min_speech_ms": saved.get("stt_vad_min_speech_ms", DEFAULT_VAD_MIN_SPEECH_MS),
+            "stt_clean_enabled": saved.get("stt_clean_enabled", DEFAULT_CLEAN_ENABLED),
+            "stt_clean_llm_enabled": saved.get("stt_clean_llm_enabled", DEFAULT_CLEAN_LLM_ENABLED),
+            "stt_clean_llm_model": saved.get("stt_clean_llm_model", DEFAULT_CLEAN_LLM_MODEL),
+            "stt_clean_llm_timeout_ms": saved.get(
+                "stt_clean_llm_timeout_ms", DEFAULT_CLEAN_LLM_TIMEOUT_MS
+            ),
         }
 
     @property
@@ -540,6 +604,17 @@ class STTService:
             segments, info = model.transcribe(tmp_path, **kwargs)
             raw_text = " ".join(seg.text.strip() for seg in segments)
             text = filter_degenerate_text(raw_text, kwargs.get("initial_prompt", ""))
+
+            # Post-proceso, en este orden a propósito: la alucinación NUNCA debe
+            # llegar al limpiador. El VAD la para antes del decoder y la
+            # bag-of-hallucinations de arriba barre lo que se le escapó; sólo
+            # entonces se limpian muletillas y "..." de pausa. El limpiador
+            # DEGRADA a lo que recibió si algo falla — nunca rompe el dictado.
+            cleaned = clean_transcript(text, settings)
+            if cleaned != text:
+                logger.info(f"STT cleaner: {len(text)} -> {len(cleaned)} chars")
+                record_edit_pair(text, cleaned)
+            text = cleaned
 
             # duration_after_vad tells apart the two very different reasons a
             # clip comes back empty: VAD ate all of it (silence — expected for
