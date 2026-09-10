@@ -67,14 +67,33 @@ test('módulo AUSENTE del estado → todo false, instanceCount:0 (no lanza)', ()
   assert.equal(vistas[0].instanceCount, 0);
 });
 
-test('instanceCount refleja las instancias SI el estado las expone', () => {
-  // Defensivo: hoy workspaceState no expone ese campo (la multiplicidad son N
-  // claves), pero si en el futuro lo hiciera, la proyección debe respetarlo.
+test('N instancias del MISMO tipo (keyeadas por instanceId) → instanceCount N, open true (#29a)', () => {
+  // workspaceState keyea por INSTANCIA; el `.module` es el TIPO. Con varias
+  // terminales, el mapa trae N claves distintas con el MISMO `.module`. La
+  // proyección agrupa por `.module`, no por la clave (un lookup directo
+  // mapa['terminal'] daría undefined → cerrado, que era el bug ALTO del auditor).
   const estados = mapa({
-    'terminal': { module: 'terminal', open: true, minimized: false, instanceCount: 3 },
+    'terminal-1': { module: 'terminal', open: true, minimized: false },
+    'terminal-2': { module: 'terminal', open: true, minimized: true },
+    'terminal-3': { module: 'terminal', open: true, minimized: false },
+    'compare':    { module: 'compare', open: true, minimized: false },
   });
   const vistas = projectRail(estados, [{ railId: 'rail-terminal', moduleId: 'terminal' }]);
-  assert.equal(vistas[0].instanceCount, 3, 'el estado expone 3 instancias; la proyección las ignora');
+  assert.equal(vistas[0].open, true, 'con 3 terminales abiertas el rail NO puede decir cerrado');
+  assert.equal(vistas[0].instanceCount, 3, 'debe contar las 3 instancias del tipo terminal');
+  assert.equal(vistas[0].active, true, 'al menos una terminal no-minimizada → activo');
+});
+
+test('N instancias del mismo tipo, TODAS minimizadas → open true pero active false', () => {
+  const estados = mapa({
+    'terminal-1': { module: 'terminal', open: true, minimized: true },
+    'terminal-2': { module: 'terminal', open: true, minimized: true },
+  });
+  const vistas = projectRail(estados, [{ railId: 'rail-terminal', moduleId: 'terminal' }]);
+  assert.equal(vistas[0].open, true);
+  assert.equal(vistas[0].instanceCount, 2);
+  assert.equal(vistas[0].active, false, 'todas minimizadas → ninguna visible');
+  assert.equal(vistas[0].minimized, true, 'abierto pero ninguna visible → minimized (estado del rail)');
 });
 
 test('orden de salida == orden de railItems', () => {
@@ -136,7 +155,7 @@ test('moduleStates no-objeto → todo cerrado, pero sigue emitiendo una vista po
 });
 
 test('una entrada basura en el mapa (moduleId presente pero no-objeto) → cerrado, no lanza', () => {
-  const estados = { 'a': null, 'b': 'basura', 'c': { open: true, minimized: false } };
+  const estados = { 'a': null, 'b': 'basura', 'c': { module: 'c', open: true, minimized: false } };
   const vistas = projectRail(estados, [
     { railId: 'rail-a', moduleId: 'a' },
     { railId: 'rail-b', moduleId: 'b' },
