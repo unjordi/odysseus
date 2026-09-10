@@ -17,10 +17,12 @@
  * El SHAPE de un módulo en `workspaceState.all()` (ver workspaceState.js, header
  * "SHAPE (v1)") es:
  *   { module, open, minimized, mode, dock, geom, openedAt, updatedAt }
- * El KEY del mapa es la instancia (hoy == el id del módulo, porque cada tool es
- * singleton). NO hay campo de "número de instancias": la multiplicidad se
- * expresa como N claves distintas. Este módulo no inventa ese campo: si el
- * estado no lo expone, `instanceCount` cae a 1 cuando open y 0 cuando no.
+ * El KEY del mapa es la INSTANCIA (hoy == el id del módulo, porque cada tool es
+ * singleton; con #29(a) —varias terminales— serán instanceIds distintos del tipo).
+ * NO hay campo de "número de instancias": la multiplicidad se expresa como N claves
+ * distintas cuyo `.module` es el mismo tipo. Por eso `projectRail` AGRUPA por
+ * `.module` (no por la clave del mapa) y `instanceCount` es cuántas instancias de
+ * ese tipo están abiertas.
  */
 
 /**
@@ -78,26 +80,27 @@ export function projectRail(moduleStates, railItems) {
     // railItem inválido (sin railId/moduleId, o no-cadena) → se omite, sin lanzar.
     if (!esRailItemValido(item)) continue;
 
-    const rec = mapa[item.moduleId];
-    // El módulo puede estar ausente del mapa, o presente pero no un objeto
-    // (una entrada basura). En ambos casos: cerrado.
-    const estado = rec !== null && typeof rec === 'object' ? rec : null;
-
-    const open = !!(estado && estado.open === true);
-    const minimized = open && estado.minimized === true;
-    const active = open && !minimized;
-
-    // instanceCount: si el estado expone un número de instancias finito y
-    // no-negativo, se usa; si no, cae a 1 cuando open y 0 cuando no. (Hoy el
-    // estado NO expone ese campo — la multiplicidad son N claves — así que esta
-    // rama es defensiva para el futuro, no un invento.)
-    let instanceCount;
-    if (estado && typeof estado.instanceCount === 'number' &&
-        Number.isFinite(estado.instanceCount) && estado.instanceCount >= 0) {
-      instanceCount = estado.instanceCount;
-    } else {
-      instanceCount = open ? 1 : 0;
+    // workspaceState keyea por INSTANCIA; el campo `.module` es el TIPO (ver el
+    // header "SHAPE (v1)" de workspaceState.js: la clave es un instanceId y hoy
+    // coincide con el tipo SOLO porque cada tool es singleton). Un moduleId (tipo)
+    // puede tener N instancias abiertas a la vez —#29(a): varias terminales— así
+    // que agrupamos por `.module`, NO por la clave del mapa: un lookup directo
+    // `mapa[moduleId]` mostraría el rail cerrado en cuanto la clave fuera un
+    // instanceId distinto del tipo (con 3 terminales abiertas, el rail decía cerrado).
+    const abiertas = [];
+    for (const rec of Object.values(mapa)) {
+      if (rec !== null && typeof rec === 'object' && rec.module === item.moduleId && rec.open === true) {
+        abiertas.push(rec);
+      }
     }
+
+    // instanceCount = cuántas instancias de ESTE tipo están abiertas.
+    const instanceCount = abiertas.length;
+    const open = instanceCount > 0;
+    // active = alguna instancia abierta y NO minimizada (una ventana visible ahora).
+    const active = abiertas.some((rec) => rec.minimized !== true);
+    // minimized (estado del rail) = abierto pero ninguna visible (todas minimizadas).
+    const minimized = open && !active;
 
     vistas.push({
       railId: item.railId,
