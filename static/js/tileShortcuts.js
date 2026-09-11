@@ -190,6 +190,8 @@ function require_tileManager() {
 function _onKeydown(e) {
   const t = e.target;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+  // #29(f): en teléfono el tiling se DESACTIVA — no hay espacio para mosaicos.
+  if (window.innerWidth <= 768) return;
   const atajo = atajoDeEvento(e);
   if (!atajo) return;
   e.preventDefault();
