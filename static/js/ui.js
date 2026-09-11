@@ -9,6 +9,7 @@ import * as Modals from './modalManager.js';
 import spinnerModule from './spinner.js';
 import { registerMenuDismiss, dismissTopMenu, dismissOrRemove } from './escMenuStack.js';
 import { nextToolWindowZ, topToolWindowZ } from './toolWindowZOrder.js';
+import { crearArbitroEsc } from './escGesture.js';
 // #29(d) tiling estilo Rectangle: se auto-inicializa al importarse (registra sus atajos Ctrl+Alt+…
 // en DOMContentLoaded). ui.js es el home natural (atajos de teclado + modales) y siempre está en el
 // grafo de carga del shell. Ver static/js/tileShortcuts.js + tileSlots.js (el cálculo, #141).
@@ -1256,78 +1257,99 @@ if (!window._odyEscExpandGuard) {
     );
   };
 
-  document.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape' || e.defaultPrevented) return;
+  // #29(g) — ESC como GESTO: tap = NADA · hold = cerrar UNA cosa del shell ·
+  // Ctrl/Cmd+Esc = cerrar TODO. Antes el ESC era instantáneo (cerraba al toque),
+  // lo que provoca cierres accidentales; ahora el cierre del shell es DELIBERADO.
+  // Decisión de unjordi (2026-09-11). Se PRESERVA el ESC instantáneo de los
+  // campos de texto (sostener ESC para cancelar un input sería pésimo) y el orden
+  // exacto del cascade viejo. El árbitro tap/hold vive en escGesture.js (#142,
+  // auditado); aquí sólo se cablea al cascade real.
+  const MS_HOLD_ESC = 450; // #32 lo hará ajustable; hoy provisional (min util > tap)
 
-    // Find the single thing to close, in priority order. The first hit wins.
-    // Important: if a thinking block is open we MUST handle it ourselves and
-    // not fall through to closing a modal — even if its header is missing
-    // (the live-stream chat rebuilds thinking DOM mid-stream so the header
-    // can briefly be absent). Toggling the `expanded` class directly is the
-    // fallback so ESC never bypasses the thinking block to hit a modal.
-    if (_closeHoveredWindow()) {
-      e.stopImmediatePropagation(); e.preventDefault();
-      return;
-    }
-    // Transient ad-hoc menus (dropdowns / context popups) live outside the
-    // .modal system and register a dismiss callback in escMenuStack. Close the
-    // most-recently-opened one first — so a menu opened over a modal dismisses
-    // before the modal — and do it BEFORE the text-input guard below, since a
-    // menu may own the focused input (e.g. a search dropdown).
-    if (dismissTopMenu()) {
-      e.stopImmediatePropagation(); e.preventDefault();
-      return;
-    }
-    const t = e.target;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+  // Cierra EXACTAMENTE una cosa del shell, en orden de prioridad — el MISMO del
+  // árbitro viejo. Sin evento: la supresión de propagación (para que los handlers
+  // locales no cierren en un tap) ya se hizo en el keydown de abajo. Devuelve
+  // true si cerró/manejó algo (para que Ctrl+Esc pueda repetir hasta vaciar).
+  function _cerrarUnoDelShell() {
+    if (_closeHoveredWindow()) return true;
+    if (dismissTopMenu()) return true;
     const expanded = document.querySelector('.doclib-card-expanded');
+    if (expanded) { try { expanded.click(); } catch {} return true; }
     const think = document.querySelector('.thinking-content.expanded');
-    if (expanded) {
-      e.stopImmediatePropagation(); e.preventDefault();
-      try { expanded.click(); } catch {}
-      return;
-    }
     if (think) {
-      e.stopImmediatePropagation(); e.preventDefault();
       const thinkHeader = think.closest('.thinking-section')?.querySelector('.thinking-header[data-thinking-id]');
       if (thinkHeader) { try { thinkHeader.click(); } catch {} }
-      else {
-        // No header found — collapse the content directly.
-        try { think.classList.remove('expanded'); } catch {}
-      }
-      return;
+      else { try { think.classList.remove('expanded'); } catch {} }
+      return true;
     }
     const galleryEditor = document.getElementById('gallery-editor-container');
     const galleryModal = galleryEditor?.closest('.modal');
     const galleryEditing = !!(
-      galleryEditor &&
-      galleryModal &&
+      galleryEditor && galleryModal &&
       !galleryModal.classList.contains('hidden') &&
       getComputedStyle(galleryEditor).display !== 'none' &&
       galleryEditor.querySelector('.gallery-editor')
     );
-    if (galleryEditing) {
-      e.preventDefault();
-      e.stopImmediatePropagation();
-      return;
-    }
+    // Editando la galería: ESC NO cierra el modal (guard). Se corta aquí — nada
+    // que cerrar y no se cae al modal (también frena el cerrar-todo).
+    if (galleryEditing) return false;
     const settingsModal = document.getElementById('settings-modal');
     if (settingsModal && _isVisible(settingsModal)) {
       const innerForm = settingsModal.querySelector('#unified-intg-form, #set-email-accounts-form');
       if (innerForm && innerForm.style.display !== 'none' && innerForm.children.length > 0) {
-        e.preventDefault();
-        e.stopImmediatePropagation();
         innerForm.style.display = 'none';
         innerForm.innerHTML = '';
-        return;
+        return true;
       }
     }
     const topModal = pickTopModal();
-    if (!topModal) return;
+    if (!topModal) return false;
     const closeBtn = topModal.querySelector('.close-btn, .modal-close-btn, [data-action="close"]');
-    e.stopImmediatePropagation();
-    e.preventDefault();
     if (closeBtn) { try { closeBtn.click(); } catch {} }
     else { try { topModal.classList.add('hidden'); } catch {} }
+    return true;
+  }
+
+  // Ctrl/Cmd+Esc: cierra TODO lo cerrable, repitiendo el cierre-de-uno hasta que
+  // ya no cierre nada. Tope de iteraciones por si algo se re-crea al cerrar.
+  function _cerrarTodoElShell() {
+    for (let i = 0; i < 40; i++) { if (!_cerrarUnoDelShell()) break; }
+  }
+
+  const _esCampoTexto = (t) => !!(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable));
+
+  const _escArbitro = crearArbitroEsc({
+    programar: (fn, ms) => setTimeout(fn, ms),
+    cancelar: (h) => clearTimeout(h),
+    alTap: () => {},                                    // tap = nada (decisión de unjordi)
+    alHold: () => { try { _cerrarUnoDelShell(); } catch {} },
+    msHold: MS_HOLD_ESC,
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || e.defaultPrevented) return;
+    // Campos de texto: ESC instantáneo intacto. Se preserva el comportamiento
+    // ORIGINAL de cerrar al toque un menú/ventana-hover aun con foco en el campo
+    // (esos corrían ANTES del input-guard en el árbitro viejo); lo demás lo deja
+    // al ESC nativo/local del input, sin gesto.
+    if (_esCampoTexto(e.target)) {
+      if (_closeHoveredWindow() || dismissTopMenu()) { e.stopImmediatePropagation(); e.preventDefault(); }
+      return;
+    }
+    // Ctrl/Cmd+Esc = cerrar TODO, instantáneo (combo explícito, no pide hold).
+    if (e.ctrlKey || e.metaKey) {
+      e.stopImmediatePropagation(); e.preventDefault();
+      try { _cerrarTodoElShell(); } catch {}
+      return;
+    }
+    // Escape normal del shell: se SUPRIME la propagación en todo Escape (para que
+    // los handlers locales no cierren en un tap) y el gesto decide tap/hold.
+    if (_escArbitro.keydown(e)) { e.stopImmediatePropagation(); e.preventDefault(); }
+  }, true);
+
+  document.addEventListener('keyup', (e) => {
+    if (e.key !== 'Escape') return;
+    if (_esCampoTexto(e.target)) return;
+    try { _escArbitro.keyup(e); } catch {}
   }, true);
 }
