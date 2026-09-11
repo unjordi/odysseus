@@ -41891,7 +41891,10 @@ body.hoststats-compact-docked #hoststats-modal .hoststats-content.hs-mode-compac
   transition: left 0.25s ease;
 }
 body.hoststats-compact-docked .chat-input-bar {
-  margin-bottom: var(--hoststats-dock-h, 48px);
+  /* #29c: la fuente de verdad es la región reservada del borde (edgeRegions),
+     con fallback a la variable vieja y luego al default, para no romper si el
+     cableado JS aún no emitió --reserved-bottom. */
+  margin-bottom: var(--reserved-bottom, var(--hoststats-dock-h, 48px));
 }
 
 /* Host Stats sits above other tool windows like Cookbook does. */

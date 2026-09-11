@@ -112,10 +112,17 @@ function _areaUtil() {
   if (sb && sb.right > 0 && !sidebar.classList.contains('hidden')) leftEdge = Math.max(leftEdge, sb.right);
   const rr = rail?.getBoundingClientRect();
   if (rr && rr.right > 0) leftEdge = Math.max(leftEdge, rr.right);
+  // #29c/H1: restar las regiones reservadas por borde (edgeRegions emite
+  // --reserved-<edge> en <body>) para que una ventana tilada no se meta DEBAJO
+  // de un widget acoplado (p. ej. hostStats docked abajo). Se leen del CSS var
+  // para no acoplar el tiling a la instancia JS de edgeRegions.
+  const cs = getComputedStyle(document.body);
+  const reservedTop = parseFloat(cs.getPropertyValue('--reserved-top')) || 0;
+  const reservedBottom = parseFloat(cs.getPropertyValue('--reserved-bottom')) || 0;
   const left = leftEdge + 4;
-  const top = 4;
+  const top = 4 + reservedTop;
   const width = Math.max(0, window.innerWidth - left - 4);
-  const height = Math.max(0, window.innerHeight - 8);
+  const height = Math.max(0, window.innerHeight - 8 - reservedTop - reservedBottom);
   return { left, top, width, height };
 }
 

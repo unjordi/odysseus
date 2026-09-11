@@ -21,6 +21,7 @@
 
 import { makeWindowDraggable } from './windowDrag.js';
 import WorkspaceState from './workspaceState.js';
+import { edgeRegions } from './edgeRegionsInstance.js';
 
 const MODAL_ID = 'hoststats-modal';
 const ENDPOINT = '/api/hwfit/live';
@@ -307,7 +308,18 @@ function syncDock() {
   document.body.classList.toggle('hoststats-compact-docked', on);
   if (on) {
     const content = $(MODAL_ID) && $(MODAL_ID).querySelector('.modal-content');
-    if (content) document.body.style.setProperty('--hoststats-dock-h', content.offsetHeight + 'px');
+    if (content) {
+      const h = content.offsetHeight;
+      // Compat: se sigue publicando --hoststats-dock-h por si algo lo lee directo,
+      // pero la fuente de verdad ahora es la región reservada del borde inferior (#29c):
+      // reserve() apila con otros widgets y emite --reserved-bottom (suma por borde).
+      document.body.style.setProperty('--hoststats-dock-h', h + 'px');
+      edgeRegions.reserve('bottom', 'hoststats', h);
+    }
+  } else {
+    // Al salir de compact-docked (full o cerrado) hay que LIBERAR la región, o el
+    // chat/tiling seguirían reservando espacio para una barra que ya no está.
+    edgeRegions.release('bottom', 'hoststats');
   }
 }
 
