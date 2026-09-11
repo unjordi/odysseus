@@ -57,6 +57,8 @@ import spinnerModule from './js/spinner.js';
 import { initKeyboardShortcuts } from './js/keyboard-shortcuts.js';
 import { getSettings } from './js/appConfig.js';
 import { initSidebarLayout, syncRailSide } from './js/sidebar-layout.js?v=20260715startupclean';
+import WorkspaceState from './js/workspaceState.js';
+import { projectRail } from './js/railProjection.js';
 import { initSectionCollapse, initSectionDrag } from './js/section-management.js';
 
 const API_BASE = window.location.origin;
@@ -3826,6 +3828,43 @@ function startOdysseusApp() {
       });
     }
   });
+
+  // #29(b) — Rail PROYECTA el estado del workspace: cada botón refleja si su
+  // módulo está abierto/minimizado/activo y cuántas instancias hay. Derivamos
+  // railId->moduleId de _railToolMap (única fuente de la lista) + el mapa de
+  // modales que abre cada tool (evidencia: modalManager.js _AUTO_WIRE, 1418-1431).
+  // Los rails cuyo modal no se pudo confirmar (memory/theme/email: rail:null en
+  // _AUTO_WIRE) se dejan FUERA — mejor sin estado visual que con estado equivocado.
+  const _railModuleMap = {
+    'rail-compare':   'compare-model-overlay',
+    'rail-research':  'research-overlay',
+    'rail-cookbook':  'cookbook-modal',
+    'rail-archive':   'doclib-modal',
+    'rail-gallery':   'gallery-modal',
+    'rail-tasks':     'tasks-modal',
+    'rail-calendar':  'calendar-modal',
+    'rail-notes':     'notes-panel',
+  };
+  const _railItems = Object.entries(_railToolMap)
+    .filter(([railId]) => _railModuleMap[railId])
+    .map(([railId]) => ({ railId, moduleId: _railModuleMap[railId] }));
+
+  function pintarRail() {
+    try {
+      const vistas = projectRail(WorkspaceState.all(), _railItems);
+      for (const v of vistas) {
+        const btn = el(v.railId);
+        if (!btn) continue;
+        btn.classList.toggle('rail-open', !!v.open);
+        btn.classList.toggle('rail-min', !!v.minimized);
+        btn.classList.toggle('rail-active', !!v.active);
+        if (v.instanceCount > 1) btn.setAttribute('data-count', String(v.instanceCount));
+        else btn.removeAttribute('data-count');
+      }
+    } catch (_) { /* nunca lanzar: el rail es cosmético */ }
+  }
+  try { pintarRail(); } catch (_) {}
+  try { WorkspaceState.subscribe(() => { try { pintarRail(); } catch (_) {} }); } catch (_) {}
 
   // axon submenu — the single #rail-axon launcher toggles a flyout listing our
   // grouped widgets; each item delegates to its hidden sidebar tool-*-btn opener
