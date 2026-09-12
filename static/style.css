@@ -41872,6 +41872,25 @@ body.settings-sidebar-resize-active {
 /* The in-header compact strip only exists in compact mode; hide it in full. */
 .hoststats-content:not(.hs-mode-compact) #hoststats-compact-row { display: none; }
 
+/* #29(f) — En pantallas angostas la barra compacta (nowrap) no cabe en una fila y
+   se desbordaba FUERA de pantalla: solo se veían ~2-3 de 6 métricas y las demás se
+   perdían. En teléfono se deja hacer scroll horizontal (táctil) y se aprietan las
+   barras (60px→34px) y el espaciado para que quepan más de un vistazo. No se oculta
+   ninguna métrica: sigues llegando a todas deslizando. */
+@media (max-width: 768px) {
+  .hoststats-content.hs-mode-compact .hs-compact-row {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    gap: 6px;
+  }
+  .hoststats-content.hs-mode-compact .hs-compact-row::-webkit-scrollbar { height: 0; }
+  .hoststats-content.hs-mode-compact .hsc-chip { padding: 3px 6px; gap: 4px; }
+  .hoststats-content.hs-mode-compact .hsc-chip-bar .hs-bar { width: 34px; }
+  .hoststats-content.hs-mode-compact .hsc-chip-label { font-size: 9px; }
+  .hoststats-content.hs-mode-compact .hsc-title { font-size: 9px; }
+}
+
 /* Docked compact: pins to the bottom edge like a status bar, and the chat
    composer reserves room above it so they never overlap/hide each other.
    `body.hoststats-compact-docked` is set by hostStats.js while compact + open;
