@@ -41899,6 +41899,9 @@ body.settings-sidebar-resize-active {
   .hoststats-content.hs-mode-compact .hsc-chip-bar .hs-bar { width: 34px; }
   .hoststats-content.hs-mode-compact .hsc-chip-label { font-size: 9px; }
   .hoststats-content.hs-mode-compact .hsc-title { font-size: 9px; }
+  /* #29(f): en teléfono el host-stats va SIEMPRE compact (lo fuerza hostStats.js),
+     así que el selector full/compact no tiene caso — se oculta. */
+  #hoststats-mode-switch { display: none !important; }
 }
 
 /* Docked compact: pins to the bottom edge like a status bar, and the chat
@@ -41930,6 +41933,16 @@ body.hoststats-compact-docked .chat-input-bar {
      cableado JS aún no emitió --reserved-bottom. */
   margin-bottom: var(--reserved-bottom, var(--hoststats-dock-h, 48px));
 }
+
+/* #29(f) BUG (mobile): en compact-docked el wrapper #hoststats-modal es
+   position:fixed inset:0 y CUBRE todo el viewport (en ≤768px), así que CUALQUIER
+   tap en el fondo caía en él —fuera de .modal-content— y el handler global
+   "click fuera de .modal-content cierra el modal" (app.js) lo cerraba solo. La
+   barra compacta es un STATUS BAR, no un diálogo con backdrop: el wrapper NO debe
+   capturar clics; solo la barra (.modal-content) es interactiva. Mismo patrón que
+   el backdrop pointer-events:none de los modales de email. */
+body.hoststats-compact-docked #hoststats-modal { pointer-events: none; }
+body.hoststats-compact-docked #hoststats-modal .modal-content { pointer-events: auto; }
 
 /* Host Stats sits above other tool windows like Cookbook does. */
 #hoststats-modal { z-index: 262; }

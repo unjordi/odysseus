@@ -209,6 +209,15 @@ function renderCompact(data) {
 
   let html = '';
 
+  // SYS (CPU + RAM) va PRIMERO y fijo (decisión de unjordi 2026-09-14): es el
+  // medidor que siempre quieres ver de un vistazo; las GPUs (0..N) van después.
+  html += compactDuo(
+    'SYS',
+    { sub: 'CPU', pct: cpu.util },
+    { sub: 'RAM', pct: ram.percent, valText: `${fmt(ram.used_gb, 1)}/${fmt(ram.total_gb, 1)}G` },
+    { title: 'CPU load + RAM used' },
+  );
+
   if (gpus.length) {
     gpus.forEach((g) => {
       html += compactDuo(
@@ -222,14 +231,6 @@ function renderCompact(data) {
     html += `<div class="hsc-chip hsc-chip-na" title="${esc(err.gpu || 'not detected')}">`
       + `<div class="hsc-chip-label">GPU</div><div class="hsc-chip-val">—</div></div>`;
   }
-
-  // CPU + RAM en un solo chip.
-  html += compactDuo(
-    'SYS',
-    { sub: 'CPU', pct: cpu.util },
-    { sub: 'RAM', pct: ram.percent, valText: `${fmt(ram.used_gb, 1)}/${fmt(ram.total_gb, 1)}G` },
-    { title: 'CPU load + RAM used' },
-  );
 
   row.innerHTML = html;
 }
@@ -277,10 +278,19 @@ function saveMode(mode) {
   try { WorkspaceState.setMode(MODAL_ID, mode); } catch {}
 }
 
+// #29(f): en teléfono (≤768px) el host-stats va SIEMPRE en compact — el selector
+// full/compact se oculta (CSS) porque en móvil no hay caso mostrar el full. Se
+// FUERZA aquí y NO se guarda, para no pisar la preferencia de escritorio del
+// usuario (que viaja por workspaceState entre dispositivos).
+function _esTelefono() { return window.innerWidth <= 768; }
+
 function applyMode(mode, opts) {
   const o = opts || {};
-  _mode = mode === 'compact' ? 'compact' : 'full';
-  if (!o.skipSave) saveMode(_mode);
+  let target = mode === 'compact' ? 'compact' : 'full';
+  let skipSave = o.skipSave;
+  if (_esTelefono()) { target = 'compact'; skipSave = true; }
+  _mode = target;
+  if (!skipSave) saveMode(_mode);
 
   const modal = $(MODAL_ID);
   const content = modal && modal.querySelector('.modal-content');
@@ -426,6 +436,18 @@ function init() {
   }
   // Reflect the persisted mode immediately, before the first poll ever runs.
   applyMode(_mode, { skipRerender: true, skipSave: true });
+
+  // #29(f): al CRUZAR el breakpoint de teléfono, re-aplicar el modo — entrando a
+  // móvil fuerza compact (applyMode lo coacciona); saliendo a escritorio restaura
+  // la preferencia guardada (loadMode). Sin esto, un resize desktop⇄phone dejaría
+  // el modo viejo hasta un reload.
+  let _wasPhone = _esTelefono();
+  window.addEventListener('resize', () => {
+    const nowPhone = _esTelefono();
+    if (nowPhone === _wasPhone) return;
+    _wasPhone = nowPhone;
+    applyMode(loadMode(), { skipSave: true });
+  });
 
   // …then reconcile with the per-user state once it arrives from the server.
   // This is the path that carries the mode across devices and back from a
