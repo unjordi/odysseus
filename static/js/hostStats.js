@@ -321,7 +321,12 @@ async function poll() {
 
 function isOpen() {
   const m = $(MODAL_ID);
-  return m && !m.classList.contains('hidden');
+  // "Abierto" para efectos de dock/polling = visible AHORA: ni oculto ni
+  // minimizado. modalManager.minimize() agrega `modal-minimized` (NO `.hidden`),
+  // así que sin excluirla un widget minimizado seguiría reservando --reserved-bottom
+  // (margen fantasma en el chat) y el poll seguiría corriendo — justo lo que el
+  // comentario de startPolling ("Pause when ... closed/minimized") ya prometía.
+  return m && !m.classList.contains('hidden') && !m.classList.contains('modal-minimized');
 }
 
 // Docked-compact: while compact AND open, pin the bar to the bottom edge (CSS)
