@@ -2188,6 +2188,12 @@ body.bg-pattern-sparkles {
         position: relative;
         z-index: 20;
       }
+      /* #29(c/f): con el host-stats acoplado abajo, el input reserva el alto del
+         widget; si no, el margin-bottom:0 de arriba lo deja detras de la barra.
+         !important porque el layout welcome movil lo capaba. */
+      body.hoststats-compact-docked .chat-container.welcome-active .chat-input-bar {
+        margin-bottom: var(--reserved-bottom, var(--hoststats-dock-h, 48px)) !important;
+      }
       .chat-container.welcome-active:has(.chat-input-bar:focus-within) #welcome-screen,
       .chat-container.welcome-active:has(textarea#message:not(:placeholder-shown)) #welcome-screen {
         opacity: 0;
