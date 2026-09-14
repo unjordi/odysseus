@@ -41908,6 +41908,12 @@ body.settings-sidebar-resize-active {
   /* #29(f): en teléfono el host-stats va SIEMPRE compact (lo fuerza hostStats.js),
      así que el selector full/compact no tiene caso — se oculta. */
   #hoststats-mode-switch { display: none !important; }
+  /* #29(f): en teléfono el rail es overlay/hamburguesa y NO reflowea el chat (que
+     es full-width). El bar docked debe seguir el viewport del chat (left:0), no
+     correrse cuando el rail se despliega y cambia --icon-rail-w. */
+  body.hoststats-compact-docked #hoststats-modal .modal-content.hs-mode-compact {
+    left: 0 !important;
+  }
 }
 
 /* Docked compact: pins to the bottom edge like a status bar, and the chat
@@ -41933,6 +41939,12 @@ body.hoststats-compact-docked #hoststats-modal .hoststats-content.hs-mode-compac
   border-left: 0; border-right: 0; border-bottom: 0;
   transition: left 0.25s ease;
 }
+/* #29(f): el bar compacto acoplado NO es un bottom-sheet que se arrastre, asi que
+   el grab-handle (pill de ~24px arriba) es puro desperdicio — en telefono cada
+   pixel cuenta. Se oculta el grip y se colapsa el padding superior del bar docked. */
+body.hoststats-compact-docked #hoststats-modal .modal-content::before { display: none !important; }
+body.hoststats-compact-docked #hoststats-modal .modal-content.hs-mode-compact { padding-top: 4px !important; }
+
 body.hoststats-compact-docked .chat-input-bar {
   /* #29c: la fuente de verdad es la región reservada del borde (edgeRegions),
      con fallback a la variable vieja y luego al default, para no romper si el
