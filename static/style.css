@@ -41858,6 +41858,16 @@ body.settings-sidebar-resize-active {
 .hsc-chip-val.hs-hot { color: var(--red, #e06c75); }
 .hsc-chip-na { opacity: 0.6; }
 
+/* #29(f) — chip AGRUPADO del compact: dos métricas relacionadas (GPU load+VRAM,
+   o CPU+RAM) apiladas en UN elemento, para que el compact quepa en celular con
+   pocos chips en vez de N sueltos que se desbordaban. */
+.hsc-chip.hsc-duo { flex-direction: column; align-items: stretch; gap: 3px; }
+.hsc-duo .hsc-chip-label { margin: 0 0 1px 0; }
+.hsc-duo-metrics { display: flex; flex-direction: column; gap: 2px; }
+.hsc-duo-row { display: flex; align-items: center; gap: 6px; }
+.hsc-duo-sub { font-size: 9px; letter-spacing: 0.5px; text-transform: uppercase; color: var(--fg); opacity: 0.6; min-width: 32px; white-space: nowrap; }
+.hsc-duo-row .hsc-chip-val { margin-left: auto; }
+
 /* Compact mode: the whole panel collapses to just its title bar, with the stat
    chips rendered inline in the header. No body — the bar IS the panel. */
 .hoststats-content.hs-mode-compact {
