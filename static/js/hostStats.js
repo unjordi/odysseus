@@ -175,8 +175,30 @@ function renderFull(data) {
   body.innerHTML = html;
 }
 
-// Condensed strip: one mini-chip per GPU (load), per GPU (VRAM), CPU, RAM —
-// same chip markup/classes regardless of how many GPUs are present.
+// Chip AGRUPADO: dos métricas relacionadas en UN solo elemento (GPU load + su
+// VRAM, o CPU + RAM). #29(f) (unjordi): agrupar así deja el compact en pocos
+// elementos que SÍ caben en celular, en vez de N chips sueltos que se desbordaban.
+// Cada métrica = { sub, pct, tone?, valText? }.
+function compactDuo(label, a, b, opts) {
+  const o = opts || {};
+  const metricRow = (m) => {
+    const tone = m.tone !== undefined ? m.tone : loadTone(m.pct);
+    const valText = m.valText != null ? m.valText : `${fmt(m.pct, 0)}%`;
+    return `<div class="hsc-duo-row">`
+      + `<span class="hsc-duo-sub">${esc(m.sub)}</span>`
+      + `<div class="hsc-chip-bar">${segBar(m.pct, tone, COMPACT_SEGMENTS)}</div>`
+      + `<span class="hsc-chip-val${tone ? ' hs-' + tone : ''}">${esc(valText)}</span>`
+      + `</div>`;
+  };
+  return `<div class="hsc-chip hsc-duo" title="${esc(o.title || label)}">`
+    + `<div class="hsc-chip-label">${esc(label)}</div>`
+    + `<div class="hsc-duo-metrics">${metricRow(a)}${metricRow(b)}</div>`
+    + `</div>`;
+}
+
+// Condensed strip: UN chip agrupado por GPU (carga + VRAM juntas) + un chip SYS
+// (CPU + RAM juntos). Antes eran chips sueltos (GPU0, VRAM0, GPU1, VRAM1, CPU,
+// RAM) que no cabían en celular; agrupados caben. Mismo markup/clases de chip.
 function renderCompact(data) {
   const row = $('hoststats-compact-row');
   if (!row) return;
@@ -189,11 +211,11 @@ function renderCompact(data) {
 
   if (gpus.length) {
     gpus.forEach((g) => {
-      html += compactChip(`GPU${g.index}`, g.util, { title: `GPU${g.index} · ${g.name || 'GPU'} load` });
-      html += compactChip(
-        gpus.length > 1 ? `VRAM${g.index}` : 'VRAM',
-        g.mem_percent,
-        { title: `GPU${g.index} VRAM`, valText: `${fmt(g.mem_used_gb, 1)}/${fmt(g.mem_total_gb, 1)}G` },
+      html += compactDuo(
+        gpus.length > 1 ? `GPU${g.index}` : 'GPU',
+        { sub: 'LOAD', pct: g.util },
+        { sub: 'VRAM', pct: g.mem_percent, valText: `${fmt(g.mem_used_gb, 1)}/${fmt(g.mem_total_gb, 1)}G` },
+        { title: `GPU${g.index} · ${g.name || 'GPU'} (load + VRAM)` },
       );
     });
   } else {
@@ -201,11 +223,13 @@ function renderCompact(data) {
       + `<div class="hsc-chip-label">GPU</div><div class="hsc-chip-val">—</div></div>`;
   }
 
-  html += compactChip('CPU', cpu.util, { title: `CPU load${cpu.cores ? ' · ' + cpu.cores + 'c' : ''}` });
-  html += compactChip('RAM', ram.percent, {
-    title: 'RAM used',
-    valText: `${fmt(ram.used_gb, 1)}/${fmt(ram.total_gb, 1)}G`,
-  });
+  // CPU + RAM en un solo chip.
+  html += compactDuo(
+    'SYS',
+    { sub: 'CPU', pct: cpu.util },
+    { sub: 'RAM', pct: ram.percent, valText: `${fmt(ram.used_gb, 1)}/${fmt(ram.total_gb, 1)}G` },
+    { title: 'CPU load + RAM used' },
+  );
 
   row.innerHTML = html;
 }
