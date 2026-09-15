@@ -42003,7 +42003,7 @@ body.hoststats-compact-docked #hoststats-modal .modal-content { pointer-events: 
   appearance: none;
   -webkit-appearance: none;
   background: transparent;
-  padding: 6px 14px;
+  padding: 6px 10px;   /* apretado para que las 6 pestañas de axon + Widgets quepan en UNA fila sin wrap (#32) */
   font-size: 12px;
   font-family: inherit;
   color: var(--fg-muted);
