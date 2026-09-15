@@ -22103,7 +22103,8 @@ body.gallery-selecting .gallery-dl-btn,
   .admin-tabs,
   .lib-tabs,
   .gallery-tabs,
-  .preset-tabs {
+  .preset-tabs,
+  .axoncfg-tabs {
     flex-wrap: nowrap !important;
     overflow-x: auto !important;
     overflow-y: hidden;
@@ -22116,7 +22117,8 @@ body.gallery-selecting .gallery-dl-btn,
   .admin-tabs::-webkit-scrollbar,
   .lib-tabs::-webkit-scrollbar,
   .gallery-tabs::-webkit-scrollbar,
-  .preset-tabs::-webkit-scrollbar {
+  .preset-tabs::-webkit-scrollbar,
+  .axoncfg-tabs::-webkit-scrollbar {
     display: none;
   }
   .cookbook-tabs > *,
@@ -22124,7 +22126,8 @@ body.gallery-selecting .gallery-dl-btn,
   .admin-tabs > *,
   .lib-tabs > *,
   .gallery-tabs > *,
-  .preset-tabs > * {
+  .preset-tabs > *,
+  .axoncfg-tabs > * {
     flex-shrink: 0;
   }
 }
@@ -41977,6 +41980,53 @@ body.hoststats-compact-docked #hoststats-modal .modal-content { pointer-events: 
 
 /* El contenedor del panel: axonConfig.js lo llena entero. */
 .axoncfg-panel { min-width: 0; }
+
+/* Pestañas por grupo — reúsan el patrón visual del Cookbook (.cookbook-tabs/
+   .cookbook-tab): subrayado del activo, misma familia de tabs del modal. En
+   desktop hacen wrap (nunca desbordan aunque el schema traiga muchos grupos);
+   en móvil el media query compartido (junto a cookbook/admin/lib/…) las vuelve
+   una tira con scroll horizontal. */
+.axoncfg-tabs {
+  display: flex;
+  gap: 0;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 10px;
+}
+.axoncfg-tab {
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--fg-muted);
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: color 0.1s, border-color 0.1s;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.axoncfg-tab:hover { color: var(--fg); }
+.axoncfg-tab.active {
+  color: var(--accent, var(--red));
+  border-bottom-color: var(--accent, var(--red));
+}
+.axoncfg-tab-empty { opacity: 0.45; }
+.axoncfg-tab-count {
+  font-size: 10px;
+  min-width: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  line-height: 15px;
+  text-align: center;
+  background: color-mix(in srgb, var(--accent, var(--fg)) 22%, transparent);
+  color: var(--fg);
+}
+.axoncfg-tab-count:empty { display: none; }
 
 /* Barra de búsqueda + acciones. Pegada arriba porque el panel es largo. */
 .axoncfg-toolbar {
