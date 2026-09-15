@@ -31,6 +31,7 @@ import { suspendDock, resumeDock, clearRightDock, applyEdgeDock } from './modalS
 import { dismissOrRemove } from './escMenuStack.js';
 import { nextToolWindowZ } from './toolWindowZOrder.js';
 import WorkspaceState from './workspaceState.js';
+import { selectSwitchableWindows } from './modalSwitcher.js';
 
 const _state = new Map(); // id -> { restoreFn, closeFn, railBtnId, isMinimized, restoreMinHeight }
 
@@ -1344,6 +1345,61 @@ export function frontmostInstanceId() {
     if (z >= bestZ) { bestZ = z; best = m.id; }
   });
   return best;
+}
+
+// Deriva el TIPO (module) desde el id de instancia: quita el sufijo de clon
+// `--N` de las terminales (#29a: `term-modal--2` → `term-modal`) para que el
+// switcher pueda resolver una etiqueta por tipo. Los singletons no lo tienen y
+// quedan igual (`cortex-modal` → `cortex-modal`).
+function _baseModuleId(id) {
+  return (typeof id === 'string') ? id.replace(/--\d+$/, '') : id;
+}
+
+// Describe, LEYENDO EL DOM EN VIVO, cada ventana candidata a switcheable. Es la
+// misma superficie que frontmostInstanceId (selector `.modal, .research-overlay`)
+// pero incluyendo las minimizadas y marcando cuáles son ventanas-herramienta
+// reales (`_hasEdgeDock`, que windowDrag pone en las arrastrables) frente a los
+// diálogos de confirmación. El FILTRO/orden vive en el núcleo puro
+// (modalSwitcher.selectSwitchableWindows), probado con node --test.
+function _windowDescriptors() {
+  const out = [];
+  document.querySelectorAll('.modal, .research-overlay').forEach((m) => {
+    if (!m.id) return;
+    const isResearch = m.classList.contains('research-overlay');
+    let display = 'block';
+    try { display = getComputedStyle(m).display; } catch (_) {}
+    let z = 0;
+    try { z = parseInt(getComputedStyle(m).zIndex, 10) || 0; } catch (_) {}
+    out.push({
+      id: m.id,
+      module: _baseModuleId(m.id),
+      // Ventana-herramienta = overlay de research, o `.modal` marcada como
+      // arrastrable con edge-dock. Excluye los diálogos de confirmación, que
+      // son `.modal` pero nunca reciben `_hasEdgeDock`.
+      isToolWindow: isResearch || m._hasEdgeDock === true,
+      hidden: m.classList.contains('hidden'),
+      minimized: m.classList.contains('modal-minimized')
+        || _state.get(m.id)?.isMinimized === true,
+      display,
+      z,
+    });
+  });
+  return out;
+}
+
+/**
+ * Lista de instancias SWITCHEABLES (ventanas-herramienta abiertas o minimizadas),
+ * leída del DOM VIVO — no de la persistencia. Es la FUENTE del switcher (#29f):
+ * reemplaza a `workspaceState.openInstances()`, que estaba pensada para RESTORE
+ * cross-device y (a) solo registra la lista `_AUTO_WIRE` — dejaba fuera Cortex,
+ * las terminales (#29a) y todo lo no listado— y (b) arrastra fantasmas
+ * `open:true` de sesiones previas para ids que el barrido no limpia (p. ej. el id
+ * virtual `doc-panel` → "Document"). Devuelve el shape `[{ id, module, minimized }]`
+ * que consume el núcleo puro (buildSwitcher). NUNCA lanza.
+ */
+export function openToolWindows() {
+  try { return selectSwitchableWindows(_windowDescriptors()); }
+  catch (_) { return []; }
 }
 
 /**
