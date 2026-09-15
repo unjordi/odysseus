@@ -73,6 +73,11 @@ function _applyRememberedDock(id) {
 let _modalTopZ = 300;
 function _bringToFront(modal) {
   if (!modal) return;
+  // #29(f): el host-stats en compact-docked es un STATUS BAR anclado al borde, no una
+  // tool-window flotante — no debe entrar a la carrera de z (subiria por encima del rail y
+  // su backdrop). Se queda en el z docked que le fija hostStats.js:syncDock (262, bajo el
+  // rail 400). Sin este guard, cualquier _bringToFront (focus/show) lo re-elevaba.
+  if (modal.id === 'hoststats-modal' && document.body.classList.contains('hoststats-compact-docked')) return;
   const z = nextToolWindowZ({
     exclude: modal,
     current: getComputedStyle(modal).zIndex,
