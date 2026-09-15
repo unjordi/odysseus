@@ -209,6 +209,7 @@ test('integración: selectSwitchableWindows → buildSwitcher lista SOLO las rea
   const open = selectSwitchableWindows(escena);
   const labels = { 'cortex-modal': 'Cortex', 'term-modal': 'Terminal', 'hoststats-modal': 'Host Stats' };
   const view = buildSwitcher(open, labels, 'term-modal--2');
-  assert.deepEqual(view.map((x) => x.label), ['Host Stats', 'Cortex', 'Terminal']);
-  assert.deepEqual(view.map((x) => x.active), [false, false, true]);
+  // Host Stats (status bar) NO entra; solo las ventanas reales, orden z ascendente.
+  assert.deepEqual(view.map((x) => x.label), ['Cortex', 'Terminal']);
+  assert.deepEqual(view.map((x) => x.active), [false, true]);
 });
