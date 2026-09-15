@@ -42232,8 +42232,31 @@ body.hoststats-compact-docked #hoststats-modal .modal-content { pointer-events: 
 
 .axoncfg-unavailable .axoncfg-btn { margin-top: 8px; }
 
+/* Perillas de Widgets (#29): título por widget + control range↔número.
+   Espeja los tokens de .axoncfg-knob; el slider toma el acento del panel. */
+.axoncfg-widget-title {
+  margin: 12px 0 2px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: color-mix(in srgb, var(--fg) 82%, transparent);
+}
+.axoncfg-widget-range {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--accent, var(--fg));
+  cursor: pointer;
+}
+.axoncfg-widget-num {
+  flex: 0 0 auto;
+  width: 74px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 @media (max-width: 600px) {
   .axoncfg-knob-ctl { flex-wrap: wrap; }
+  .axoncfg-widget-num { width: 100%; text-align: left; }
   .axoncfg-actions { width: 100%; justify-content: flex-end; }
 }
 
