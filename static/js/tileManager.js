@@ -91,7 +91,12 @@ function _viewportSafeRect() {
   };
 }
 
-function _zoneForPointer(x, y) {
+// `excludeSides` — cuando el drag del header lo va a manejar el edge-dock de
+// modalSnap (windowDrag), tileManager CEDE las zonas left-half/right-half para
+// no competir por el mismo gesto (ver el comentario de _applySnap y el marcador
+// modal._hasEdgeDock que pone windowDrag.js). Las demás zonas (top/bottom/
+// maximize/fullscreen) las sigue sirviendo tileManager — modalSnap no las cubre.
+function _zoneForPointer(x, y, excludeSides = false) {
   const safe = _viewportSafeRect();
   const W = safe.right - safe.left;
   const H = safe.bottom - safe.top;
@@ -112,9 +117,9 @@ function _zoneForPointer(x, y) {
   // without covering navigation.
   if (y <= safe.top + EDGE_THRESHOLD_PX)
     return { name: 'top-half', rect: { left: safe.left, top: safe.top, width: W, height: H / 2 } };
-  if (x <= safe.left + EDGE_THRESHOLD_PX)
+  if (!excludeSides && x <= safe.left + EDGE_THRESHOLD_PX)
     return { name: 'left-half', rect: { left: safe.left, top: safe.top, width: W / 2, height: H } };
-  if (x >= safe.right - EDGE_THRESHOLD_PX)
+  if (!excludeSides && x >= safe.right - EDGE_THRESHOLD_PX)
     return { name: 'right-half', rect: { left: safe.left + W / 2, top: safe.top, width: W / 2, height: H } };
   if (y >= safe.bottom - EDGE_THRESHOLD_PX)
     return { name: 'bottom-half', rect: { left: safe.left, top: safe.top + H / 2, width: W, height: H / 2 } };
@@ -122,9 +127,9 @@ function _zoneForPointer(x, y) {
   return null;
 }
 
-function _zoneForContent(content, x, y) {
+function _zoneForContent(content, x, y, excludeSides = false) {
   const modal = content && content.closest && content.closest('.modal, .research-overlay');
-  const zone = _zoneForPointer(x, y);
+  const zone = _zoneForPointer(x, y, excludeSides);
   if (!zone) return null;
   // Settings has a dense two-column layout; the full-height sidebar-style dock
   // crushes it. Let it tile only into the normal right half, where the nav can
@@ -269,8 +274,13 @@ document.addEventListener('pointermove', (e) => {
     _tracking.willUnsnap = false;
   }
 
-  // Detect snap zone under cursor
-  const zone = _zoneForContent(_tracking.content, e.clientX, e.clientY);
+  // Detect snap zone under cursor. Si el modal es dock-capaz (windowDrag le
+  // puso `_hasEdgeDock`), CEDEMOS las zonas L/R al edge-dock de modalSnap para
+  // no competir en el mismo drag-release (fuente única de verdad del edge-dock).
+  const _modal = _tracking.content && _tracking.content.closest
+    && _tracking.content.closest('.modal, .research-overlay');
+  const _excludeSides = !!(_modal && _modal._hasEdgeDock);
+  const zone = _zoneForContent(_tracking.content, e.clientX, e.clientY, _excludeSides);
   if (zone) {
     _showGhost(zone.rect);
     _activeZone = zone;
@@ -297,6 +307,14 @@ function _reclampAll(animate = false) {
   document.querySelectorAll('.modal-content[data-_tile-zone], .research-pane[data-_tile-zone]').forEach(c => {
     const name = c.dataset._tileZone;
     if (!name) return;
+    // Si el modal quedó edge-docked (modalSnap es su dueño), tileManager NO lo
+    // reclampa: reaplicar la geometría de tile pelearía con el ancho reservado
+    // del dock. Limpiamos el rastro de tile para que no vuelva a intentarlo.
+    const _m = c.closest && c.closest('.modal, .research-overlay');
+    if (_m && (_m.classList.contains('modal-left-docked') || _m.classList.contains('modal-right-docked'))) {
+      delete c.dataset._tileZone;
+      return;
+    }
     const safe = _viewportSafeRect();
     const W = safe.right - safe.left, H = safe.bottom - safe.top;
     let r;
@@ -374,12 +392,12 @@ export function clearPreview() {
   _activeZone = null;
 }
 
-export function _zoneForPointerForTests(x, y) {
-  return _zoneForPointer(x, y);
+export function _zoneForPointerForTests(x, y, excludeSides = false) {
+  return _zoneForPointer(x, y, excludeSides);
 }
 
-export function _zoneForContentForTests(content, x, y) {
-  return _zoneForContent(content, x, y);
+export function _zoneForContentForTests(content, x, y, excludeSides = false) {
+  return _zoneForContent(content, x, y, excludeSides);
 }
 
 // Snap a modal (its .modal-content) into a previously-detected zone.
