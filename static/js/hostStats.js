@@ -21,18 +21,67 @@
 
 import { makeWindowDraggable } from './windowDrag.js';
 import WorkspaceState from './workspaceState.js';
+import WidgetSettings from './widgetSettings.js';
 import { edgeRegions } from './edgeRegionsInstance.js';
 
 const MODAL_ID = 'hoststats-modal';
 const ENDPOINT = '/api/hwfit/live';
-const REFRESH_MS = 1500;
-const SEGMENTS = 24; // segmented-bar resolution (full mode)
-const COMPACT_SEGMENTS = 10; // segmented-bar resolution (compact chips)
 // DEPRECATED — read-only. The view mode now lives in the shell state
 // (workspaceState.js), which is per USER and survives a signout; this key is
 // only still read so an existing browser keeps its mode on the first load
 // after the upgrade. workspaceState's migration folds it in once.
 const MODE_KEY = 'odysseus.hostStats.viewMode.v1';
+
+// ── Configurable knobs (#29 widget-settings) ──
+//
+// These used to be hardcoded consts (REFRESH_MS / SEGMENTS / COMPACT_SEGMENTS,
+// plus the 90/70 tone thresholds baked into loadTone). They now live in the
+// per-user WidgetSettings store so they can be tuned from Settings › Axon ›
+// Widgets and follow the user across devices. This table is the ONE source of
+// truth for their defaults + ranges: WidgetSettings.defineWidget() reads it to
+// clamp writes, and the axon panel imports it to build the controls. `default`
+// mirrors the old const exactly, so an empty store behaves identically to
+// before. Exported for axonConfig.js.
+export const HOSTSTATS_WIDGET_ID = 'hoststats';
+export const HOSTSTATS_KNOBS = {
+  refreshMs: {
+    default: 1500, min: 500, max: 10000, step: 100, int: true,
+    label: 'Refresh interval (ms)',
+    help: 'How often the panel polls host stats. Lower = snappier, higher = lighter.',
+  },
+  segments: {
+    default: 24, min: 8, max: 48, step: 1, int: true,
+    label: 'Bar segments (full)',
+    help: 'Resolution of the segmented bars in full mode.',
+  },
+  compactSegments: {
+    default: 10, min: 4, max: 20, step: 1, int: true,
+    label: 'Bar segments (compact)',
+    help: 'Resolution of the mini-bars in the compact strip.',
+  },
+  hotPct: {
+    default: 90, min: 50, max: 100, step: 1, int: true,
+    label: 'Hot threshold (%)',
+    help: 'At or above this load, the tone turns "hot" (red).',
+  },
+  warnPct: {
+    default: 70, min: 30, max: 100, step: 1, int: true,
+    label: 'Warn threshold (%)',
+    help: 'At or above this load, the tone turns "warn" (amber).',
+  },
+};
+
+WidgetSettings.defineWidget(HOSTSTATS_WIDGET_ID, HOSTSTATS_KNOBS);
+
+// Live mirror of the knob values, refreshed from the store on init, on the
+// ready() reconcile, and on every subscribed change. Reading a plain variable
+// keeps the hot render/poll paths synchronous and avoids hitting the store on
+// every segment drawn.
+let _refreshMs = HOSTSTATS_KNOBS.refreshMs.default;
+let _segments = HOSTSTATS_KNOBS.segments.default;
+let _compactSegments = HOSTSTATS_KNOBS.compactSegments.default;
+let _hotPct = HOSTSTATS_KNOBS.hotPct.default;
+let _warnPct = HOSTSTATS_KNOBS.warnPct.default;
 
 let _timer = null;
 let _inFlight = false;
@@ -49,7 +98,7 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => (
 // climb. Degrades to an all-empty bar when pct is null/NaN. Shared by both
 // the full-size cards and the compact chips (just a different segment count).
 function segBar(pct, tone, segs) {
-  const n = segs || SEGMENTS;
+  const n = segs || _segments;
   const p = (typeof pct === 'number' && isFinite(pct)) ? Math.max(0, Math.min(100, pct)) : null;
   const filled = p == null ? 0 : Math.round((p / 100) * n);
   let cells = '';
@@ -59,11 +108,13 @@ function segBar(pct, tone, segs) {
   return `<div class="hs-bar${tone ? ' hs-' + tone : ''}${p == null ? ' hs-bar-na' : ''}">${cells}</div>`;
 }
 
-// Color tone thresholds shared by load-like metrics (0..100).
+// Color tone thresholds shared by load-like metrics (0..100). The hot/warn
+// cutoffs are the user-tunable knobs (#29 widget-settings); tempTone below is a
+// separate, physical scale (°C) and stays fixed.
 function loadTone(pct) {
   if (pct == null) return null;
-  if (pct >= 90) return 'hot';
-  if (pct >= 70) return 'warn';
+  if (pct >= _hotPct) return 'hot';
+  if (pct >= _warnPct) return 'warn';
   return 'ok';
 }
 function tempTone(c) {
@@ -114,7 +165,7 @@ function compactChip(label, pct, opts) {
   const valText = o.valText != null ? o.valText : `${fmt(pct, 0)}%`;
   return `<div class="hsc-chip" title="${esc(o.title || label)}">`
     + `<div class="hsc-chip-label">${esc(label)}</div>`
-    + `<div class="hsc-chip-bar">${segBar(pct, tone, COMPACT_SEGMENTS)}</div>`
+    + `<div class="hsc-chip-bar">${segBar(pct, tone, _compactSegments)}</div>`
     + `<div class="hsc-chip-val${tone ? ' hs-' + tone : ''}">${esc(valText)}</div>`
     + `</div>`;
 }
@@ -186,7 +237,7 @@ function compactDuo(label, a, b, opts) {
     const valText = m.valText != null ? m.valText : `${fmt(m.pct, 0)}%`;
     return `<div class="hsc-duo-row">`
       + `<span class="hsc-duo-sub">${esc(m.sub)}</span>`
-      + `<div class="hsc-chip-bar">${segBar(m.pct, tone, COMPACT_SEGMENTS)}</div>`
+      + `<div class="hsc-chip-bar">${segBar(m.pct, tone, _compactSegments)}</div>`
       + `<span class="hsc-chip-val${tone ? ' hs-' + tone : ''}">${esc(valText)}</span>`
       + `</div>`;
   };
@@ -372,18 +423,45 @@ function syncDock() {
   }
 }
 
-function startPolling() {
-  stopPolling();
-  poll();
+// Arm the recurring poll at the current _refreshMs. Split out from
+// startPolling so a live refreshMs change (see _syncKnobs) can re-arm the
+// interval without forcing an extra immediate poll.
+function _armTimer() {
   _timer = setInterval(() => {
     // Pause when the tab is hidden or the modal is closed/minimized.
     if (document.hidden || !isOpen()) return;
     poll();
-  }, REFRESH_MS);
+  }, _refreshMs);
+}
+
+function startPolling() {
+  stopPolling();
+  poll();
+  _armTimer();
 }
 
 function stopPolling() {
   if (_timer) { clearInterval(_timer); _timer = null; }
+}
+
+// Pull the live knob values from the store into the module mirror. Re-arms the
+// poll interval if refreshMs changed while polling, and re-renders the last
+// frame if a visual knob (segments / thresholds) changed. Cheap and safe to
+// call on every store change.
+function _syncKnobs() {
+  const vals = WidgetSettings.getAll(HOSTSTATS_WIDGET_ID);
+  const prevRefresh = _refreshMs;
+  const prevVisual = `${_segments}|${_compactSegments}|${_hotPct}|${_warnPct}`;
+
+  _refreshMs = vals.refreshMs != null ? vals.refreshMs : HOSTSTATS_KNOBS.refreshMs.default;
+  _segments = vals.segments != null ? vals.segments : HOSTSTATS_KNOBS.segments.default;
+  _compactSegments = vals.compactSegments != null ? vals.compactSegments : HOSTSTATS_KNOBS.compactSegments.default;
+  _hotPct = vals.hotPct != null ? vals.hotPct : HOSTSTATS_KNOBS.hotPct.default;
+  _warnPct = vals.warnPct != null ? vals.warnPct : HOSTSTATS_KNOBS.warnPct.default;
+
+  if (_refreshMs !== prevRefresh && _timer) { stopPolling(); _armTimer(); }
+  const nextVisual = `${_segments}|${_compactSegments}|${_hotPct}|${_warnPct}`;
+  if (nextVisual !== prevVisual && _lastData) render(_lastData);
 }
 
 function open() {
@@ -422,6 +500,13 @@ function toggle() {
 
 function init() {
   _mode = loadMode();
+
+  // Seed the knob mirror from the store's synchronous cache, then keep it live:
+  // subscribe to edits (from the Settings › Axon › Widgets panel) and reconcile
+  // once the per-user values arrive from the server (cross-device / post-signin).
+  _syncKnobs();
+  WidgetSettings.subscribe((widgetId) => { if (widgetId === HOSTSTATS_WIDGET_ID) _syncKnobs(); });
+  WidgetSettings.ready().then(_syncKnobs).catch(() => {});
 
   // Odysseus opens every tool through its `tool-*-btn`; the icon-rail launcher
   // just forwards its click to that button via app.js's `_railToolMap` (where
