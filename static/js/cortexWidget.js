@@ -696,13 +696,17 @@ function renderBrokerTab() {
     if (_broker.status === 'idle' || _broker.status === 'loading') {
       html += '<div class="hoststats-loading">[ ESCANEANDO… ]</div>';
     } else if (_broker.reason === 'sin-vista-del-host') {
-      // NO es un error: axon corre contenerizado y no ve la sesión de usuario del host, así que el
-      // estado DETALLADO (servicio, knobs) solo se lee en el widget de escritorio. El sondeo de arriba
-      // ya dijo lo esencial. Se explica en vez de mostrar una caja de "sin datos" que asustaría.
+      // NO es un error: el contenedor SÍ alcanza el broker por su socket (por eso corre los comandos y
+      // lo sondea, arriba). Lo que NO ve es el SERVICIO systemd --user que lo administra —estado/knobs—,
+      // que vive en la sesión de escritorio, fuera del contenedor. Se explica en vez de una caja de
+      // "sin datos" que asustaría. (Antes esta copy decía "sin acceso al host" y se contradecía con el
+      // sondeo de arriba: el broker responde JUSTO porque hay acceso al host por el socket.)
       html += '<div class="cortex-usage-caption" style="opacity:0.6;margin-top:4px">'
-        + 'El estado detallado del servicio y los knobs no se pueden leer desde aquí: axon corre '
-        + 'contenerizado, sin acceso a la sesión de usuario del host. Esa vista vive en el widget de '
-        + 'escritorio (KDE). Lo que sí se puede afirmar — si el broker responde — está arriba.'
+        + 'El broker responde por su socket — por eso los comandos de esta terminal corren en el host '
+        + '(arriba). Lo que este contenedor no ve es el panel del SERVICIO que lo administra (systemd: '
+        + 'si está activo/habilitado, memoria, reinicios) ni sus knobs: eso vive en tu sesión de '
+        + 'escritorio (systemd --user / widget KDE), fuera del contenedor. Por eso ese panel se lee y '
+        + 'se edita en el widget de escritorio.'
         + '</div>';
     } else {
       html += emptyStateInner(stateMessage(_broker));
