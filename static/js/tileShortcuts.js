@@ -190,8 +190,12 @@ function require_tileManager() {
 function _onKeydown(e) {
   const t = e.target;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-  // #29(f): en teléfono el tiling se DESACTIVA — no hay espacio para mosaicos.
-  if (window.innerWidth <= 768) return;
+  // NOTA: NO se corta por ancho de viewport. El tiling debe operar también en
+  // móvil — tileSlots.js trae las FRACCIONES ½/⅔/⅓ diseñadas justo para partir
+  // pantallas chicas. (Un guard `innerWidth <= 768 return` metido sin
+  // autorización apagaba el tiling en teléfono; revertido a propósito. El área
+  // se calcula desde innerWidth/innerHeight reales en _areaUtil(), así que se
+  // adapta a cualquier ancho sin asumir escritorio.)
   const atajo = atajoDeEvento(e);
   if (!atajo) return;
   e.preventDefault();
