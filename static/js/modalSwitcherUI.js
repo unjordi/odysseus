@@ -16,7 +16,7 @@
 
 import { buildSwitcher, nextInSwitcher, prevInSwitcher } from './modalSwitcher.js';
 import WorkspaceState from './workspaceState.js';
-import { labelFor, focusInstance, frontmostInstanceId } from './modalManager.js';
+import { labelFor, focusInstance, frontmostInstanceId, openToolWindows } from './modalManager.js';
 
 let _fab = null;         // botón flotante
 let _panel = null;       // lista desplegable
@@ -81,7 +81,13 @@ function _ensureStyles() {
   (document.head || document.documentElement).appendChild(style);
 }
 
-function _openList() { return WorkspaceState.openInstances ? WorkspaceState.openInstances() : []; }
+// FUENTE de la lista del switcher: las ventanas-herramienta REALMENTE abiertas o
+// minimizadas, leídas del DOM vivo por modalManager.openToolWindows (#29f). Antes
+// se leía workspaceState.openInstances(), que es la persistencia para RESTORE:
+// listaba fantasmas ("Document"/id virtual doc-panel, la barra docked de Host
+// Stats) y OMITÍA Cortex y las terminales (no están en _AUTO_WIRE). El DOM es la
+// única fuente que refleja lo que el usuario puede enfocar ahora.
+function _openList() { return openToolWindows ? openToolWindows() : []; }
 
 function _labelsMap(list) {
   const map = {};

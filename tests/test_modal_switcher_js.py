@@ -9,6 +9,12 @@ list keeps its input order, labels resolve module→id when missing, `active` ma
 only the active id, several instances of the same module type list separately
 (#29a), next/prev navigate with wrap in both directions, an absent currentId
 starts at the right end, and invalid input neither throws nor fabricates rows.
+
+It also pins selectSwitchableWindows — the pure filter behind the switcher's
+"open windows" registry: from DOM-read descriptors it keeps only real tool
+windows (not confirmation dialogs) that are open or minimized, drops the closed
+ones, orders by z, and no longer lists persistence ghosts (Document/Host-Stats)
+while omitting the actually-open Cortex/Terminal windows.
 """
 
 import shutil
