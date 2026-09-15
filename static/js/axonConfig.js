@@ -20,6 +20,9 @@
 // Nunca un "✓ aplicado" pelón para algo que solo se persistió.
 // ============================================
 
+import WidgetSettings from './widgetSettings.js';
+import { HOSTSTATS_KNOBS, HOSTSTATS_WIDGET_ID } from './hostStats.js';
+
 const PANEL_SEL = '[data-settings-panel="axon"]';
 const ENDPOINT = '/api/axon/config';
 
@@ -615,6 +618,11 @@ function renderUnavailable(reason) {
   retry.addEventListener('click', () => load());
   card.appendChild(retry);
   panel.appendChild(card);
+
+  // Las perillas de Widgets NO dependen de axon (su fuente es /api/prefs), así
+  // que siguen funcionando aunque axon esté caído. Se pintan aquí sin la barra
+  // de pestañas — es la única sección operable en el modo degradado.
+  panel.appendChild(buildWidgetsSection());
 }
 
 function renderPersistBanner() {
@@ -710,6 +718,97 @@ async function saveDirty() {
   const set = {};
   for (const [k, v] of _dirty) set[k] = v;
   await post({ set });
+}
+
+/* ── Pestaña "Widgets" ──
+ *
+ * Perillas de los WIDGETS del shell (host-stats el primero), NO de axon. No
+ * pasan por /api/axon/config: se leen y se guardan por-usuario en el store
+ * WidgetSettings (server-side, /api/prefs/widget-settings). Por eso esta
+ * sección es INDEPENDIENTE del schema de axon — se pinta igual aunque el
+ * endpoint de axon esté caído (ver renderUnavailable). Cada perilla aplica en
+ * caliente y se persiste (debounced) al editar; sin barra de guardar ni dirty
+ * tracking (ese flujo es solo de las perillas de axon).
+ *
+ * La FUENTE de las perillas de host-stats es HOSTSTATS_KNOBS, importado de
+ * hostStats.js — la MISMA tabla con la que el store clampa y con la que el
+ * widget lee sus defaults (una sola fuente de verdad).
+ */
+function widgetKnobRow(widgetId, key, spec) {
+  const row = elt('div', 'axoncfg-knob');
+  row.dataset.key = `widget:${widgetId}:${key}`;
+  row.dataset.advanced = '0';
+  row.dataset.haystack = [spec.label, key, spec.help || '', 'widgets', widgetId]
+    .join(' ').toLowerCase();
+
+  const idBase = `axoncfg-w-${widgetId}-${key}`;
+
+  const head = elt('div', 'axoncfg-knob-head');
+  const lbl = elt('label', 'axoncfg-knob-label', spec.label || key);
+  lbl.htmlFor = `${idBase}-num`;
+  head.appendChild(lbl);
+  head.appendChild(chip('en caliente', 'axoncfg-chip-hot', 'Se aplica al instante y se guarda por usuario.'));
+  row.appendChild(head);
+
+  const cur = WidgetSettings.get(widgetId, key, spec.default);
+
+  const ctlWrap = elt('div', 'axoncfg-knob-ctl axoncfg-widget-ctl');
+  const range = document.createElement('input');
+  range.type = 'range';
+  range.className = 'axoncfg-input axoncfg-widget-range';
+  range.id = `${idBase}-range`;
+  range.min = String(spec.min); range.max = String(spec.max); range.step = String(spec.step || 1);
+  range.value = String(cur);
+
+  const num = document.createElement('input');
+  num.type = 'number';
+  num.className = 'settings-select axoncfg-input axoncfg-widget-num';
+  num.id = `${idBase}-num`;
+  num.min = String(spec.min); num.max = String(spec.max); num.step = String(spec.step || 1);
+  num.value = String(cur);
+
+  // set() clamps; read the stored value back so both controls settle on the
+  // clamped result (a slider dragged past the rail sticks at the rail).
+  const apply = (raw) => {
+    WidgetSettings.set(widgetId, key, raw);
+    const v = WidgetSettings.get(widgetId, key, spec.default);
+    range.value = String(v);
+    num.value = String(v);
+  };
+  range.addEventListener('input', () => { num.value = range.value; });
+  range.addEventListener('change', () => apply(range.value));
+  num.addEventListener('change', () => apply(num.value));
+
+  ctlWrap.appendChild(range);
+  ctlWrap.appendChild(num);
+  row.appendChild(ctlWrap);
+
+  const bits = [];
+  if (spec.help) bits.push(spec.help);
+  bits.push(`Rango: ${spec.min}–${spec.max} · default: ${spec.default}`);
+  row.appendChild(elt('div', 'axoncfg-knob-help admin-toggle-sub', bits.join(' · ')));
+
+  return row;
+}
+
+function buildWidgetsSection() {
+  const sec = elt('section', 'admin-card axoncfg-group');
+  sec.dataset.group = 'widgets';
+  sec.appendChild(elt('h2', null, 'Widgets'));
+  sec.appendChild(elt('div', 'admin-toggle-sub',
+    'Ajustes de los widgets del shell. Se guardan POR USUARIO (server-side, /api/prefs) y '
+    + 'viajan entre dispositivos — independientes de la configuración de axon, así que esta '
+    + 'pestaña funciona aunque axon no esté corriendo.'));
+
+  // Host Stats es el PRIMER widget: su sub-bloque establece el patrón que
+  // reusarán tiling y switcher (un <h3> por widget + sus perillas).
+  const hs = elt('div', 'axoncfg-knobs');
+  hs.appendChild(elt('h3', 'axoncfg-widget-title', 'Host Stats'));
+  for (const [key, spec] of Object.entries(HOSTSTATS_KNOBS)) {
+    hs.appendChild(widgetKnobRow(HOSTSTATS_WIDGET_ID, key, spec));
+  }
+  sec.appendChild(hs);
+  return sec;
 }
 
 function renderPanel() {
@@ -819,6 +918,26 @@ function renderPanel() {
       applyFilter();
     });
     tabs.appendChild(tab);
+  }
+
+  // Pestaña "Widgets" — NO sale del schema de axon: son prefs de widgets del
+  // shell, en su propia fuente (WidgetSettings / /api/prefs). Se agrega como una
+  // pestaña más para que conviva con el resto, pero su sección no depende de
+  // _snap y por eso también se pinta en el modo degradado (renderUnavailable).
+  {
+    sections.push(buildWidgetsSection());
+    const wtab = elt('button', 'axoncfg-tab');
+    wtab.type = 'button';
+    wtab.dataset.group = 'widgets';
+    wtab.setAttribute('role', 'tab');
+    wtab.appendChild(elt('span', 'axoncfg-tab-label', 'Widgets'));
+    wtab.appendChild(elt('span', 'axoncfg-tab-count', ''));
+    wtab.addEventListener('click', () => {
+      _activeTab = 'widgets';
+      syncTabs();
+      applyFilter();
+    });
+    tabs.appendChild(wtab);
   }
 
   // Pestaña activa: conserva la previa si sigue existiendo (re-render tras POST),
