@@ -128,11 +128,18 @@ const escena = [
 
 test('selectSwitchableWindows: incluye solo ventanas-herramienta abiertas/minimizadas', () => {
   const v = selectSwitchableWindows(escena);
-  // Ordenadas por z ASCENDENTE: hoststats(40) < cortex(120) < term(130).
-  assert.deepEqual(v.map((x) => x.id), ['hoststats-modal', 'cortex-modal', 'term-modal--2']);
+  // Ordenadas por z ASCENDENTE: cortex(120) < term(130). Host Stats (status bar) NO entra.
+  assert.deepEqual(v.map((x) => x.id), ['cortex-modal', 'term-modal--2']);
   // El diálogo de confirmación y la ventana cerrada NO aparecen.
   assert.equal(v.some((x) => x.id === 'confirm-dialog'), false);
   assert.equal(v.some((x) => x.id === 'gallery-modal'), false);
+});
+
+test('selectSwitchableWindows: la barra docked de Host Stats NO es switcheable (unjordi 2026-09-15)', () => {
+  // Es un status bar persistente, no una ventana que uno switchea para trabajar en ella,
+  // aunque en el DOM sea `.modal` con edge-dock (isToolWindow:true).
+  const v = selectSwitchableWindows(escena);
+  assert.equal(v.some((x) => x.id === 'hoststats-modal'), false);
 });
 
 test('selectSwitchableWindows: Cortex y Terminal (las abiertas reales) SÍ están listadas', () => {

@@ -58,6 +58,11 @@ export function buildSwitcher(openList, labels, activeId) {
   return vista;
 }
 
+// Ventanas que son STATUS BARS persistentes (HUD anclado), no "ventanas que uno switchea
+// para trabajar en ellas" → fuera del switcher aunque en el DOM sean `.modal` con edge-dock
+// (unjordi, 2026-09-15: "Host Stats no debe estar en lo switchable").
+const NO_SWITCHEABLES = new Set(['hoststats-modal']);
+
 /**
  * Filtra y ORDENA los descriptores de ventana (leídos en vivo del DOM por el
  * caller — ver modalManager.openToolWindows) para quedarse EXACTAMENTE con las
@@ -88,6 +93,7 @@ export function selectSwitchableWindows(descriptors) {
     if (d === null || typeof d !== 'object') continue;
     if (typeof d.id !== 'string' || d.id.length === 0) continue;
     if (d.isToolWindow !== true) continue;            // fuera diálogos de confirmación
+    if (NO_SWITCHEABLES.has(d.id)) continue;          // status bars persistentes, no ventanas switcheables
     const minimized = d.minimized === true;
     const hidden = d.hidden === true || d.display === 'none';
     if (!minimized && hidden) continue;               // cerrada de verdad → fuera
