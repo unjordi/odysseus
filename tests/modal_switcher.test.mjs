@@ -17,6 +17,7 @@ import test from 'node:test';
 
 import {
   buildSwitcher,
+  selectSwitchableWindows,
   indiceDe,
   nextInSwitcher,
   prevInSwitcher,
@@ -101,4 +102,106 @@ test('un solo modal abierto: next/prev devuelven el mismo (wrap sobre 1)', () =>
   const v = buildSwitcher([{ id: 'solo', module: 'solo', open: true }], {}, 'solo');
   assert.equal(nextInSwitcher(v, 'solo'), 'solo');
   assert.equal(prevInSwitcher(v, 'solo'), 'solo');
+});
+
+// ── selectSwitchableWindows: el REGISTRO de "ventanas switcheables" (#29f) ──
+// El bug: el switcher listaba las ventanas EQUIVOCADAS ("Document" + "Host Stats")
+// y OMITÍA las abiertas de verdad (Cortex, Terminal), porque leía la PERSISTENCIA
+// (workspaceState.openInstances) en vez del DOM vivo. selectSwitchableWindows es
+// el filtro PURO que consume los descriptores del DOM (modalManager.openToolWindows)
+// y devuelve exactamente las ventanas-herramienta abiertas o minimizadas.
+//
+// Descriptor: { id, module, isToolWindow, hidden, minimized, display, z }.
+
+// Escena del bug reportado: Cortex + Terminal tileadas al frente; la barra docked
+// de Host Stats visible; un diálogo de confirmación abierto; y varias ventanas
+// cerradas (hidden) que la persistencia mostraba como fantasmas.
+const escena = [
+  { id: 'cortex-modal',   module: 'cortex-modal', isToolWindow: true,  hidden: false, minimized: false, display: 'block', z: 120 },
+  { id: 'term-modal--2',  module: 'term-modal',   isToolWindow: true,  hidden: false, minimized: false, display: 'block', z: 130 },
+  { id: 'hoststats-modal',module: 'hoststats-modal', isToolWindow: true, hidden: false, minimized: false, display: 'block', z: 40 },
+  // Diálogo de confirmación: es `.modal` pero NO ventana-herramienta → fuera.
+  { id: 'confirm-dialog', module: 'confirm-dialog', isToolWindow: false, hidden: false, minimized: false, display: 'block', z: 999 },
+  // Ventana cerrada (oculta y no minimizada) → fuera (antes fantasma de persistencia).
+  { id: 'gallery-modal',  module: 'gallery-modal', isToolWindow: true,  hidden: true,  minimized: false, display: 'none',  z: 10 },
+];
+
+test('selectSwitchableWindows: incluye solo ventanas-herramienta abiertas/minimizadas', () => {
+  const v = selectSwitchableWindows(escena);
+  // Ordenadas por z ASCENDENTE: hoststats(40) < cortex(120) < term(130).
+  assert.deepEqual(v.map((x) => x.id), ['hoststats-modal', 'cortex-modal', 'term-modal--2']);
+  // El diálogo de confirmación y la ventana cerrada NO aparecen.
+  assert.equal(v.some((x) => x.id === 'confirm-dialog'), false);
+  assert.equal(v.some((x) => x.id === 'gallery-modal'), false);
+});
+
+test('selectSwitchableWindows: Cortex y Terminal (las abiertas reales) SÍ están listadas', () => {
+  const v = selectSwitchableWindows(escena);
+  assert.ok(v.some((x) => x.id === 'cortex-modal'), 'Cortex debe aparecer');
+  assert.ok(v.some((x) => x.id === 'term-modal--2'), 'Terminal debe aparecer');
+  // Y el módulo del clon de terminal es su TIPO (lo provee el caller ya derivado).
+  assert.equal(v.find((x) => x.id === 'term-modal--2').module, 'term-modal');
+});
+
+test('selectSwitchableWindows: el fantasma de persistencia NO se cuela (fuente = DOM)', () => {
+  // "Document" venía del id virtual doc-panel con open:true heredado. Al leer del
+  // DOM, si no hay elemento no hay descriptor → nunca entra. Aquí simplemente no
+  // está en la entrada, y el resultado no lo fabrica.
+  const v = selectSwitchableWindows(escena);
+  assert.equal(v.some((x) => x.id === 'doc-panel'), false);
+  assert.equal(v.some((x) => x.module === 'doc-panel'), false);
+});
+
+test('selectSwitchableWindows: una ventana MINIMIZADA se lista (para restaurarla)', () => {
+  const v = selectSwitchableWindows([
+    { id: 'notes-panel', module: 'notes-panel', isToolWindow: true, hidden: true, minimized: true, display: 'none', z: 5 },
+  ]);
+  assert.equal(v.length, 1);
+  assert.equal(v[0].id, 'notes-panel');
+  assert.equal(v[0].minimized, true); // minimized gana sobre hidden
+});
+
+test('selectSwitchableWindows: display:none cuenta como oculta (cerrada)', () => {
+  const v = selectSwitchableWindows([
+    { id: 'x-modal', module: 'x-modal', isToolWindow: true, hidden: false, minimized: false, display: 'none', z: 1 },
+  ]);
+  assert.deepEqual(v, []);
+});
+
+test('selectSwitchableWindows: module cae al id cuando falta', () => {
+  const v = selectSwitchableWindows([
+    { id: 'lone-modal', isToolWindow: true, hidden: false, minimized: false, display: 'block', z: 1 },
+  ]);
+  assert.equal(v[0].module, 'lone-modal');
+});
+
+test('selectSwitchableWindows: entradas inválidas/no-array se manejan sin lanzar', () => {
+  assert.deepEqual(selectSwitchableWindows(null), []);
+  assert.deepEqual(selectSwitchableWindows('nope'), []);
+  const v = selectSwitchableWindows([
+    null,
+    {},
+    { id: '' },
+    { id: 'no-tool', isToolWindow: false, hidden: false, display: 'block' },
+    { id: 'ok', module: 'ok', isToolWindow: true, hidden: false, minimized: false, display: 'block', z: 1 },
+  ]);
+  assert.equal(v.length, 1);
+  assert.equal(v[0].id, 'ok');
+});
+
+test('selectSwitchableWindows: orden estable para z iguales (terminales, #29a)', () => {
+  const v = selectSwitchableWindows([
+    { id: 'term-modal',    module: 'term-modal', isToolWindow: true, hidden: false, minimized: false, display: 'block', z: 100 },
+    { id: 'term-modal--2', module: 'term-modal', isToolWindow: true, hidden: false, minimized: false, display: 'block', z: 100 },
+    { id: 'term-modal--3', module: 'term-modal', isToolWindow: true, hidden: false, minimized: false, display: 'block', z: 100 },
+  ]);
+  assert.deepEqual(v.map((x) => x.id), ['term-modal', 'term-modal--2', 'term-modal--3']);
+});
+
+test('integración: selectSwitchableWindows → buildSwitcher lista SOLO las reales', () => {
+  const open = selectSwitchableWindows(escena);
+  const labels = { 'cortex-modal': 'Cortex', 'term-modal': 'Terminal', 'hoststats-modal': 'Host Stats' };
+  const view = buildSwitcher(open, labels, 'term-modal--2');
+  assert.deepEqual(view.map((x) => x.label), ['Host Stats', 'Cortex', 'Terminal']);
+  assert.deepEqual(view.map((x) => x.active), [false, false, true]);
 });

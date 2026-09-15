@@ -126,9 +126,9 @@ function _areaUtil() {
   return { left, top, width, height };
 }
 
-export function aplicarSlot(slot) {
+export function aplicarSlot(slot, modalOverride = null) {
   if (!esSlot(slot)) return false;
-  const modal = modalEnfocado();
+  const modal = modalOverride || modalEnfocado();
   if (!modal) return false;
   const content = _contentDe(modal);
   if (!content) return false;
@@ -190,13 +190,152 @@ function require_tileManager() {
 function _onKeydown(e) {
   const t = e.target;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-  // #29(f): en teléfono el tiling se DESACTIVA — no hay espacio para mosaicos.
-  if (window.innerWidth <= 768) return;
+  // NOTA: NO se corta por ancho de viewport. El tiling debe operar también en
+  // móvil — tileSlots.js trae las FRACCIONES ½/⅔/⅓ diseñadas justo para partir
+  // pantallas chicas. (Un guard `innerWidth <= 768 return` metido sin
+  // autorización apagaba el tiling en teléfono; revertido a propósito. El área
+  // se calcula desde innerWidth/innerHeight reales en _areaUtil(), así que se
+  // adapta a cualquier ancho sin asumir escritorio.)
   const atajo = atajoDeEvento(e);
   if (!atajo) return;
   e.preventDefault();
   e.stopPropagation();
   aplicarSlot(atajo.slot);
+}
+
+// ── Superficie VISIBLE del tiling (#29d) ────────────────────────────────────
+// Hasta ahora el tiling solo tenía atajos de teclado INVISIBLES. Esto agrega una
+// afordancia visible en el header del modal: un botón "mosaico" que abre un mini
+// mapa de zonas; cada zona llama al MISMO aplicarSlot() (núcleo puro ya probado
+// de tileSlots.js). Funciona en escritorio y en móvil (donde no hay teclado, es
+// la ÚNICA vía de tiling) — las fracciones ½/⅔/⅓ parten pantallas chicas.
+
+const _SNAP_ZONES = [
+  { slot: 'top-left',     label: 'Arriba izquierda', glyph: '◰' },
+  { slot: 'top',          label: 'Mitad superior',   glyph: '▔' },
+  { slot: 'top-right',    label: 'Arriba derecha',   glyph: '◳' },
+  { slot: 'left',         label: 'Mitad izquierda',  glyph: '▏' },
+  { slot: 'maximize',     label: 'Maximizar',        glyph: '▢' },
+  { slot: 'right',        label: 'Mitad derecha',    glyph: '▕' },
+  { slot: 'bottom-left',  label: 'Abajo izquierda',  glyph: '◱' },
+  { slot: 'bottom',       label: 'Mitad inferior',   glyph: '▁' },
+  { slot: 'bottom-right', label: 'Abajo derecha',    glyph: '◲' },
+  { slot: 'center',       label: 'Centrar',          glyph: '◇' },
+  { slot: 'restore',      label: 'Restaurar',        glyph: '⤢' },
+];
+
+let _snapStylesInjected = false;
+function _ensureSnapStyles() {
+  if (_snapStylesInjected || typeof document === 'undefined') return;
+  _snapStylesInjected = true;
+  const style = document.createElement('style');
+  style.id = 'tile-snap-styles';
+  style.textContent = `
+    .modal-tile-btn { flex-shrink:0; background:none; border:none; color:inherit;
+      cursor:pointer; padding:4px; line-height:0; opacity:0.7; border-radius:4px; }
+    .modal-tile-btn:hover { opacity:1; background:color-mix(in srgb, currentColor 12%, transparent); }
+    .tile-snap-popover { position:fixed; z-index:10040; padding:8px;
+      background:var(--surface-raised, var(--bg-elevated, #1e1e24));
+      border:1px solid color-mix(in srgb, currentColor 18%, transparent);
+      border-radius:10px; box-shadow:0 8px 28px rgba(0,0,0,0.35);
+      display:grid; grid-template-columns:repeat(3, 34px); gap:6px; }
+    .tile-snap-popover .wide { grid-column:1 / -1; width:auto; }
+    .tile-snap-cell { width:34px; height:34px; display:flex; align-items:center;
+      justify-content:center; font-size:16px; cursor:pointer; border-radius:7px;
+      border:1px solid color-mix(in srgb, currentColor 16%, transparent);
+      background:color-mix(in srgb, currentColor 5%, transparent); color:inherit; }
+    .tile-snap-cell.wide { height:28px; font-size:13px; gap:6px; }
+    .tile-snap-cell:hover { background:var(--accent-primary, #60a5fa); color:#fff;
+      border-color:transparent; }
+    @media (max-width:768px) {
+      .tile-snap-popover { grid-template-columns:repeat(3, 44px); gap:8px; padding:10px; }
+      .tile-snap-cell { width:44px; height:44px; font-size:19px; }
+    }
+  `;
+  (document.head || document.documentElement).appendChild(style);
+}
+
+let _openPopover = null;
+function _closePopover() {
+  if (_openPopover) { _openPopover.remove(); _openPopover = null; }
+  document.removeEventListener('pointerdown', _onDocDown, true);
+  document.removeEventListener('keydown', _onPopoverEsc, true);
+}
+function _onDocDown(e) {
+  if (_openPopover && !_openPopover.contains(e.target)
+      && !(e.target.closest && e.target.closest('.modal-tile-btn'))) {
+    _closePopover();
+  }
+}
+function _onPopoverEsc(e) { if (e.key === 'Escape') { e.stopPropagation(); _closePopover(); } }
+
+function _openSnapPopover(btn, modal) {
+  _ensureSnapStyles();
+  if (_openPopover) { _closePopover(); return; }
+  const pop = document.createElement('div');
+  pop.className = 'tile-snap-popover';
+  for (const z of _SNAP_ZONES) {
+    const cell = document.createElement('button');
+    cell.type = 'button';
+    cell.className = 'tile-snap-cell' + ((z.slot === 'center' || z.slot === 'restore') ? ' wide' : '');
+    cell.title = z.label;
+    cell.setAttribute('aria-label', z.label);
+    cell.textContent = (z.slot === 'center' || z.slot === 'restore')
+      ? `${z.glyph}  ${z.label}` : z.glyph;
+    cell.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      aplicarSlot(z.slot, modal);
+      _closePopover();
+    });
+    pop.appendChild(cell);
+  }
+  document.body.appendChild(pop);
+  // Posicionar bajo el botón, recortando al viewport.
+  const r = btn.getBoundingClientRect();
+  const pw = pop.offsetWidth, ph = pop.offsetHeight;
+  let left = Math.min(r.left, window.innerWidth - pw - 8);
+  left = Math.max(8, left);
+  let top = r.bottom + 6;
+  if (top + ph > window.innerHeight - 8) top = Math.max(8, r.top - ph - 6);
+  pop.style.left = left + 'px';
+  pop.style.top = top + 'px';
+  _openPopover = pop;
+  document.addEventListener('pointerdown', _onDocDown, true);
+  document.addEventListener('keydown', _onPopoverEsc, true);
+}
+
+/**
+ * Inyecta el botón VISIBLE de mosaico en el header de un modal (#29d).
+ * Idempotente. Se coloca a la izquierda del botón minimizar/cerrar.
+ */
+export function injectSnapControls(modal) {
+  if (!modal || !modal.querySelector) return;
+  const header = modal.querySelector('.modal-header');
+  if (!header) return;
+  if (header.querySelector('.modal-tile-btn')) return;
+  _ensureSnapStyles();
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'modal-tile-btn';
+  btn.title = 'Acomodar en mosaico (tiling)';
+  btn.setAttribute('aria-label', 'Acomodar ventana en mosaico');
+  btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>';
+  btn.addEventListener('click', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    _openSnapPopover(btn, modal);
+  });
+  // Colocar antes del minimizar (o del cerrar), para que el par _/X quede a la
+  // derecha. margin-left:auto empuja el grupo de botones al borde derecho.
+  const anchor = header.querySelector('.modal-minimize-btn, .minimize-btn, [data-minimize], .close-btn, .modal-close');
+  if (anchor && anchor.parentNode) {
+    btn.style.marginLeft = 'auto';
+    anchor.parentNode.insertBefore(btn, anchor);
+    btn.style.marginLeft = '';
+    // Ya no somos el primero en empujar: dejar que el minimizar mantenga su auto.
+  } else {
+    btn.style.marginLeft = 'auto';
+    header.appendChild(btn);
+  }
 }
 
 let _registered = false;
@@ -215,4 +354,4 @@ if (typeof document !== 'undefined') {
 }
 
 export { ATAJOS };
-export default { init, aplicarSlot, modalEnfocado, atajoDeEvento, claveDeEvento, slotParaClave, ATAJOS };
+export default { init, aplicarSlot, injectSnapControls, modalEnfocado, atajoDeEvento, claveDeEvento, slotParaClave, ATAJOS };

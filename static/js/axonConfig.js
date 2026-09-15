@@ -30,6 +30,7 @@ const _pendingRestart = new Set();       // keys guardadas esperando reinicio de
 let _query = '';                         // filtro de búsqueda vivo
 let _busy = false;                       // hay un GET/POST en vuelo
 let _loaded = false;                     // ya cargamos al menos una vez
+let _activeTab = null;                    // grupo/pestaña activo (id de schema.groups)
 
 const $panel = () => document.querySelector(PANEL_SEL);
 const $ = (id) => document.getElementById(id);
@@ -740,6 +741,16 @@ function renderPanel() {
     if (!groups.some(x => x.id === g)) groups.push({ id: g, label: g });
   }
 
+  // Antes: TODOS los grupos apilados en un scroll único ("chorizo infinito").
+  // Ahora: un grupo = una PESTAÑA. Reúsamos el patrón de pestañas del Cookbook
+  // (.cookbook-tabs/.cookbook-tab → aquí .axoncfg-tabs/.axoncfg-tab, misma familia
+  // visual: subrayado del activo, scroll horizontal en móvil sin desbordar). Solo
+  // la sección del grupo activo se muestra; la búsqueda CRUZA pestañas (ver
+  // applyFilter). Construimos primero todas las secciones, luego la barra.
+  const tabs = elt('div', 'axoncfg-tabs');
+  tabs.setAttribute('role', 'tablist');
+  const sections = [];
+
   for (const g of groups) {
     const knobs = byGroup.get(g.id) || [];
     if (!knobs.length && g.id !== 'cerebro') continue;
@@ -791,9 +802,36 @@ function renderPanel() {
       det.appendChild(box);
       sec.appendChild(det);
     }
-    panel.appendChild(sec);
+
+    sections.push(sec);
+
+    // Pestaña de este grupo. La etiqueta es el nombre del grupo; el contador se
+    // llena solo cuando hay búsqueda (cuántas perillas matchean en ese grupo).
+    const tab = elt('button', 'axoncfg-tab');
+    tab.type = 'button';
+    tab.dataset.group = g.id;
+    tab.setAttribute('role', 'tab');
+    tab.appendChild(elt('span', 'axoncfg-tab-label', g.label || g.id));
+    tab.appendChild(elt('span', 'axoncfg-tab-count', ''));
+    tab.addEventListener('click', () => {
+      _activeTab = g.id;
+      syncTabs();
+      applyFilter();
+    });
+    tabs.appendChild(tab);
   }
 
+  // Pestaña activa: conserva la previa si sigue existiendo (re-render tras POST),
+  // si no cae a la primera.
+  if (!sections.some(s => s.dataset.group === _activeTab)) {
+    _activeTab = sections.length ? sections[0].dataset.group : null;
+  }
+
+  // Con una sola pestaña la barra no aporta nada (sería un solo botón): se omite.
+  if (sections.length > 1) panel.appendChild(tabs);
+  sections.forEach(s => panel.appendChild(s));
+
+  syncTabs();
   syncSaveBar();
   applyFilter();
 
@@ -802,28 +840,63 @@ function renderPanel() {
   }
 }
 
-/* ── Búsqueda viva: filtra a través de TODOS los grupos ── */
+// Marca la pestaña activa (subrayado). Sin efecto si aún no hay barra pintada.
+function syncTabs() {
+  const panel = $panel();
+  if (!panel) return;
+  panel.querySelectorAll('.axoncfg-tab').forEach(t => {
+    const on = t.dataset.group === _activeTab;
+    t.classList.toggle('active', on);
+    t.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+}
 
+/* ── Búsqueda viva + visibilidad por pestaña ──
+ *
+ * DECISIÓN (búsqueda con pestañas): la búsqueda CRUZA pestañas. Con las perillas
+ * repartidas en tabs, esconder los matches que caen en otra pestaña sería una
+ * trampa ("no encuentro X" cuando sí está, en otro tab). Por eso:
+ *   · SIN búsqueda → solo la sección del grupo ACTIVO se muestra (modo pestañas).
+ *   · CON búsqueda → se muestran TODAS las secciones con ≥1 match (cada una con
+ *     su <h2>, así se ve a qué grupo pertenece cada resultado), y cada pestaña
+ *     enseña un contador de cuántas perillas matchean en su grupo (las de 0 se
+ *     atenúan). El subrayado del tab activo se conserva como referencia.
+ */
 function applyFilter() {
   const panel = $panel();
   if (!panel) return;
   const terms = _query ? _query.split(/\s+/).filter(Boolean) : [];
+  const searching = terms.length > 0;
+
+  // Mapa grupo→#matches, para llenar los contadores de las pestañas.
+  const hitsByGroup = new Map();
 
   panel.querySelectorAll('.axoncfg-group').forEach(sec => {
     let visible = 0;
     sec.querySelectorAll('.axoncfg-knob').forEach(row => {
       const hay = row.dataset.haystack || '';
-      const match = !terms.length || terms.every(t => hay.includes(t));
+      const match = !searching || terms.every(t => hay.includes(t));
       row.classList.toggle('axoncfg-hidden', !match);
       if (match) visible++;
     });
     // Con búsqueda activa, las avanzadas que hacen match se REVELAN.
     sec.querySelectorAll('details.axoncfg-advanced').forEach(det => {
       const hits = det.querySelectorAll('.axoncfg-knob:not(.axoncfg-hidden)').length;
-      det.classList.toggle('axoncfg-hidden', terms.length > 0 && hits === 0);
-      if (terms.length) det.open = hits > 0;
+      det.classList.toggle('axoncfg-hidden', searching && hits === 0);
+      if (searching) det.open = hits > 0;
     });
-    sec.classList.toggle('axoncfg-hidden', visible === 0);
+    hitsByGroup.set(sec.dataset.group, visible);
+    // Buscando: se ve si tiene algún match. Sin buscar: solo el grupo activo.
+    const show = searching ? visible > 0 : sec.dataset.group === _activeTab;
+    sec.classList.toggle('axoncfg-hidden', !show);
+  });
+
+  // Contadores de las pestañas (solo en modo búsqueda).
+  panel.querySelectorAll('.axoncfg-tab').forEach(tab => {
+    const cnt = tab.querySelector('.axoncfg-tab-count');
+    const hits = hitsByGroup.get(tab.dataset.group) || 0;
+    if (cnt) cnt.textContent = searching && hits ? String(hits) : '';
+    tab.classList.toggle('axoncfg-tab-empty', searching && hits === 0);
   });
 }
 
