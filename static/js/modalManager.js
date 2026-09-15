@@ -26,6 +26,7 @@
  */
 
 import { previewZoneAt, clearPreview, snapModalToZone } from './tileManager.js';
+import { injectSnapControls } from './tileShortcuts.js';
 import { suspendDock, resumeDock, clearRightDock, applyEdgeDock } from './modalSnap.js';
 import { dismissOrRemove } from './escMenuStack.js';
 import { nextToolWindowZ } from './toolWindowZOrder.js';
@@ -1300,6 +1301,51 @@ export function restore(id) {
   return true;
 }
 
+// ── #29f: helpers para el switcher de instancias abiertas ──────────────────
+// El switcher (modalSwitcherUI.js) navega entre las ventanas/terminales
+// abiertas — sobre todo en móvil, donde van a fullscreen de una en una. Estos
+// helpers exponen lo que su núcleo puro (modalSwitcher.js) necesita cablear:
+// la etiqueta legible, traer una instancia al frente, y cuál está al frente.
+
+/** Etiqueta legible de una instancia (del mapa _LABELS), cae al id. */
+export function labelFor(id) {
+  const meta = _LABELS[id];
+  return (meta && meta.label) || id;
+}
+
+/**
+ * Trae al frente una instancia por id: si estaba minimizada la restaura; si ya
+ * estaba abierta solo sube su z-order (sin re-disparar restoreFn). Es la acción
+ * "seleccionar" del switcher.
+ */
+export function focusInstance(id) {
+  const modal = document.getElementById(id);
+  if (!modal) return false;
+  const s = _state.get(id);
+  const minimized = (s && s.isMinimized === true) || modal.classList.contains('modal-minimized');
+  if (minimized) return restore(id);
+  modal.classList.remove('hidden');
+  modal.style.display = '';
+  _bringToFront(modal);
+  try { WorkspaceState.markOpen(id); } catch (_) {}
+  return true;
+}
+
+/** Id de la instancia AL FRENTE (mayor z-index visible), o null. */
+export function frontmostInstanceId() {
+  let best = null, bestZ = -Infinity;
+  document.querySelectorAll('.modal, .research-overlay').forEach((m) => {
+    if (!m.id || m.classList.contains('hidden') || m.classList.contains('modal-minimized')) return;
+    let disp = 'block';
+    try { disp = getComputedStyle(m).display; } catch (_) {}
+    if (disp === 'none') return;
+    let z = 0;
+    try { z = parseInt(getComputedStyle(m).zIndex, 10) || 0; } catch (_) {}
+    if (z >= bestZ) { bestZ = z; best = m.id; }
+  });
+  return best;
+}
+
 /**
  * If the modal is currently MINIMIZED, restore it and return true.
  * Otherwise return false so the caller falls through to its own
@@ -1530,6 +1576,18 @@ function _scanAndWire() {
     if (!modal) continue;
     injectMinimizeButton(modal, id);
   }
+  // #29d — superficie VISIBLE del tiling: inyecta el botón de mosaico en TODA
+  // ventana-herramienta arrastrable (marcada `_hasEdgeDock` por windowDrag, lo
+  // que la distingue de un diálogo de confirmación). Cubre las terminales
+  // (varias instancias, #29a) y todo lo demás, no solo la lista _AUTO_WIRE.
+  // injectSnapControls es idempotente y se ancla junto al botón minimizar/cerrar.
+  try {
+    document.querySelectorAll('.modal, .research-overlay').forEach((m) => {
+      if (m && m._hasEdgeDock && m.querySelector && m.querySelector('.modal-header')) {
+        injectSnapControls(m);
+      }
+    });
+  } catch (e) { console.warn('[modalManager] snap controls inject failed:', e); }
   try { _syncWorkspaceState(); } catch (e) { console.warn('[modalManager] workspace sync failed:', e); }
 }
 const _scanTimer = setInterval(_scanAndWire, 1000);
@@ -1630,4 +1688,4 @@ document.addEventListener('click', (e) => {
   }
 }, true);
 
-export default { register, unregister, isRegistered, isMinimized, minimize, restore, toggle, close, injectMinimizeButton };
+export default { register, unregister, isRegistered, isMinimized, minimize, restore, toggle, close, injectMinimizeButton, labelFor, focusInstance, frontmostInstanceId };

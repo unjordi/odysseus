@@ -14,6 +14,10 @@ import { crearArbitroEsc } from './escGesture.js';
 // en DOMContentLoaded). ui.js es el home natural (atajos de teclado + modales) y siempre está en el
 // grafo de carga del shell. Ver static/js/tileShortcuts.js + tileSlots.js (el cálculo, #141).
 import './tileShortcuts.js';
+// #29(f) switcher de instancias abiertas: se auto-inicializa al importarse
+// (pinta un FAB + lista para cambiar de ventana/terminal, sobre todo en móvil;
+// atajos Ctrl+Alt+RePág/AvPág para ciclar). Reusa el núcleo puro modalSwitcher.js.
+import './modalSwitcherUI.js';
 
 let toastEl = null;
 let autoScrollEnabled = true;
