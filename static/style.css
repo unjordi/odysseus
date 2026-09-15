@@ -41966,13 +41966,10 @@ body.hoststats-compact-docked #hoststats-modal { pointer-events: none; }
 body.hoststats-compact-docked #hoststats-modal .modal-content { pointer-events: auto; }
 
 /* Host Stats sits above other tool windows like Cookbook does. */
+/* #29(f): en compact-docked el bar cede su z-index al rail — lo baja hostStats.js:syncDock()
+   (a 262, bajo el backdrop 390 y el rail 400), porque el modal manager le deja un z-index
+   inline con !important que un selector CSS no puede ganar. */
 #hoststats-modal { z-index: 262; }
-/* #29(f): en compact-docked el host-stats es un STATUS BAR, no una tool-window flotante.
-   El modal manager le deja z-index:1001 inline (de cuando se abrió como tool-window), que lo
-   dibuja ENCIMA del rail y su backdrop. Docked debe CEDER al rail: se fuerza el z-index de
-   diseño (262 < backdrop #sidebar-backdrop 390 < rail #sidebar 400) para que el rail siempre
-   quede arriba. `!important` porque un z-index inline no lo gana un selector normal. */
-body.hoststats-compact-docked #hoststats-modal { z-index: 262 !important; }
 
 /* ============================================================
    AXON — panel de configuración de axon DENTRO de Settings (#32).

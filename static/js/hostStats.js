@@ -345,8 +345,15 @@ function isOpen() {
 function syncDock() {
   const on = _mode === 'compact' && isOpen();
   document.body.classList.toggle('hoststats-compact-docked', on);
+  const modal = $(MODAL_ID);
   if (on) {
-    const content = $(MODAL_ID) && $(MODAL_ID).querySelector('.modal-content');
+    // #29(f): en docked el bar es un STATUS BAR, no una tool-window flotante. El modal
+    // manager le dejó z-index:1001 inline con `important` (al abrirlo como tool-window),
+    // que lo dibuja ENCIMA del rail (#sidebar 400) y su backdrop (390). Un CSS !important
+    // NO le gana a un inline !important, así que se baja aquí al z-index de diseño (262 <
+    // 390 < 400) para que el rail SIEMPRE quede arriba. Se restaura al salir de docked.
+    if (modal) modal.style.setProperty('z-index', '262', 'important');
+    const content = modal && modal.querySelector('.modal-content');
     if (content) {
       const h = content.offsetHeight;
       // Compat: se sigue publicando --hoststats-dock-h por si algo lo lee directo,
@@ -356,8 +363,11 @@ function syncDock() {
       edgeRegions.reserve('bottom', 'hoststats', h);
     }
   } else {
-    // Al salir de compact-docked (full o cerrado) hay que LIBERAR la región, o el
-    // chat/tiling seguirían reservando espacio para una barra que ya no está.
+    // Al salir de compact-docked (full o cerrado): se restaura el stacking normal (se
+    // quita el override; el modal manager re-asigna su z al enfocar/abrir la tool-window)
+    // y hay que LIBERAR la región, o el chat/tiling seguirían reservando espacio para una
+    // barra que ya no está.
+    if (modal) modal.style.removeProperty('z-index');
     edgeRegions.release('bottom', 'hoststats');
   }
 }
