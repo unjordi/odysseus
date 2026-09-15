@@ -5,9 +5,13 @@
 // sino una fuga o una promesa falsa —
 //   (1) el TOKEN del broker jamás llega al HTML (el helper no lo emite; esto verifica que la pestaña
 //       tampoco lo reconstruya ni lo pinte por accidente), y
-//   (2) la pestaña DICE que es de solo lectura y marca con candado los knobs `gui=lee` — si el aviso
-//       desaparece, la página promete una edición que el endpoint de axon no implementa (solo `list`).
-// El resto verifica que los 12 knobs del spec de cortex se rendericen agrupados como en el QML.
+//   (2) el SPLIT editable/solo-lectura no miente: los knobs `gui=edita` se rinden con control editable
+//       + Guardar (que escribe por PUT /api/cortex/broker/knobs, ruteado al helper server-side vía el
+//       canal /run del broker — axon #187), y los `gui=lee` (contrato/seguridad) quedan con candado y
+//       SIN control de escritura, porque broker-knobs.sh los RECHAZA en cualquier GUI. Si un `gui=lee`
+//       apareciera editable, la página prometería una edición que el helper no aplica.
+// El resto verifica que los 12 knobs del spec de cortex se rendericen agrupados como en el QML, que el
+// botón REINICIAR exista, y que un broker inalcanzable degrade con gracia (no una caja de error cruda).
 //
 // El fixture (tests/broker_tab_fixture.json) es la salida REAL de broker-scan.sh/broker-knobs.sh,
 // anonimizada. Cuando los helpers de cortex existen en la máquina, el último test los corre en vivo y
@@ -51,17 +55,17 @@ globalThis.fetch = async () => { throw new Error('esta suite no debe tocar la re
 // que sigue verde con el código roto no prueba nada). Cada control apaga UNA garantía; con él puesto,
 // la suite DEBE fallar. Los tres se corrieron al escribirla y los tres se pusieron rojos.
 const MUTACIONES = {
-  1: ["k.gui === 'lee' ?", 'false ?'],                       // se cae el candado de los knobs de solo lectura
-  2: ['Vista de SOLO LECTURA', 'Vista'],                     // se cae el aviso de solo lectura
+  1: ["k.gui === 'edita' ?", 'true ?'],                      // todo se rinde editable ⇒ se caen los candados de gui=lee
+  2: ['.env del host', '.env'],                              // se cae la explicación de dónde se tocan los de contrato
   3: ['`${fmtInt(tk.chars)} chars`', 'String(tk.chars)'],    // el token deja de reportarse por longitud
-  4: ["_broker.reason === 'sin-vista-del-host'", 'false'],   // sin-vista deja de degradar con gracia
+  4: ["_broker.reason === 'broker-inalcanzable'", 'false'],  // broker-inalcanzable deja de degradar con gracia
   5: ['_brokerKnobs.data.grupos) && _brokerKnobs.data.grupos.length', 'false'],  // deja de leer grupos del endpoint
 };
 
 function cargarWidget() {
   let src = readFileSync('static/js/cortexWidget.js', 'utf8').replace(
     'export default { open, close, toggle };',
-    'export { renderBrokerTab, sondeoPanelHtml, refreshBroker, knobRowHtml, _broker, _brokerKnobs, ENDPOINTS };',
+    'export { renderBrokerTab, sondeoPanelHtml, refreshBroker, knobRowHtml, _broker, _brokerKnobs, _brokerPendingRestart, ENDPOINTS };',
   );
   const ctrl = Number(process.env.BROKER_TAB_CONTROL || 0);
   if (ctrl) {
@@ -107,8 +111,10 @@ test('un fallo del helper NOMBRA el motivo en vez de callar', () => {
   assert.match(html, /broker-scan\.sh/);
 });
 
-test('la pestaña AVISA que es de solo lectura', () => {
-  assert.ok(conDatos().includes('Vista de SOLO LECTURA'));
+test('la pestaña explica el split editable/solo-lectura sin prometer de más', () => {
+  const html = conDatos();
+  assert.match(html, /editables/);        // dice que hay knobs editables
+  assert.match(html, /\.env del host/);   // y que los de contrato/seguridad se tocan a mano en el host
 });
 
 test('muestra servicio, puerto y socket reales', () => {
@@ -132,6 +138,34 @@ test('los 12 knobs del spec salen todos, y los gui=lee con candado', () => {
   for (const k of knobs) assert.ok(html.includes(k.env), `falta el knob ${k.env}`);
   const candados = (html.match(/cortex-knob-lock/g) || []).length;
   assert.equal(candados, knobs.filter((k) => k.gui === 'lee').length);
+});
+
+test('los gui=edita se rinden EDITABLES (input + Guardar); los gui=lee no tienen control de escritura', () => {
+  const html = conDatos();
+  const knobs = FIX.knobs.knobs;
+  const editables = knobs.filter((k) => k.gui === 'edita').length;
+  // Un botón Guardar por knob editable, ni más ni menos (los gui=lee no lo tienen).
+  const saves = (html.match(/data-action="broker-knob-save"/g) || []).length;
+  assert.equal(saves, editables);
+  // Y hay un control de entrada por knob editable.
+  const inputs = (html.match(/data-broker-knob/g) || []).length;
+  assert.equal(inputs, editables);
+});
+
+test('la pestaña ofrece REINICIAR el servicio (resuelve "dice pendiente de reinicio pero NO HAY BOTÓN")', () => {
+  assert.match(conDatos(), /data-action="broker-restart"/);
+});
+
+test('un knob guardado se marca "pendiente de reinicio", nunca "aplicado ahora"', () => {
+  const editable = FIX.knobs.knobs.find((k) => k.gui === 'edita');
+  W._brokerPendingRestart.add(editable.env);
+  try {
+    const html = conDatos();
+    assert.match(html, /pendiente de reinicio/);
+    assert.doesNotMatch(html, /aplicado ahora/);   // el broker lee su env AL ARRANCAR: no aplica en caliente
+  } finally {
+    W._brokerPendingRestart.delete(editable.env);
+  }
 });
 
 test('los grupos se rotulan en el ORDEN y con los TÍTULOS que emite el endpoint (#148)', () => {
@@ -167,10 +201,15 @@ test('un knob sin valor en el .env se marca default; con valor, .env', () => {
   assert.ok(W.knobRowHtml({ ...base, actual: '9', gui: 'edita' }).includes('>.env<'));
 });
 
-test('el endpoint que consume es de solo lectura (list), nunca set/unset', () => {
+test('lee por ?knobs=1 y ESCRIBE por los endpoints HTTP dedicados, nunca invocando el helper directo', () => {
   assert.equal(W.ENDPOINTS.broker, '/api/cortex/broker?knobs=1');
   const src = readFileSync('static/js/cortexWidget.js', 'utf8');
+  // La escritura va por los endpoints de axon (que rutean a broker-knobs.sh server-side, vía /run), NO
+  // por el navegador invocando el comando shell: el string `broker-knobs.sh set/unset` no debe aparecer
+  // en el cliente, y sí los endpoints HTTP dedicados.
   assert.equal(/broker-knobs\.sh['"\s+]*(set|unset)/.test(src), false);
+  assert.ok(src.includes('/api/cortex/broker/knobs'));    // PUT set/unset
+  assert.ok(src.includes('/api/cortex/broker/restart'));   // POST restart
 });
 
 test('el sondeo del broker se muestra siempre, arriba de todo', () => {
@@ -180,16 +219,20 @@ test('el sondeo del broker se muestra siempre, arriba de todo', () => {
   assert.equal(W.sondeoPanelHtml(null), '');
 });
 
-test('sin vista del host (axon contenerizado) NO es una caja de error: explica y conserva el sondeo', async () => {
+test('broker-inalcanzable NO es una caja de error cruda: explica sin contradecir el sondeo', async () => {
+  // El scan/knobs corren A TRAVÉS del broker (/run); si no responde por su socket, degradamos con una
+  // explicación honesta —el broker es el acceso al host, y lo que falla es que el SERVICIO no contesta—
+  // en vez de la caja [ SIN DATOS ]. Reemplaza al viejo `sin-vista-del-host` (axon #187).
   await conRespuesta({
-    ok: false, reason: 'sin-vista-del-host', detail: 'axon no ve la sesión de usuario del host',
-    knobs: { ok: false, reason: 'sin-vista-del-host', detail: 'idem' },
-    sondeo: { mode: 'host', configured: true, reachable: true },
+    ok: false, reason: 'broker-inalcanzable', detail: 'el broker no responde por su socket',
+    knobs: { ok: false, reason: 'broker-inalcanzable', detail: 'idem' },
+    sondeo: { mode: 'host-down', configured: true, reachable: false, detail: 'ECONNREFUSED' },
   });
   const html = W.renderBrokerTab();
-  assert.match(html, /responde/);                    // el sondeo sobrevive
-  assert.match(html, /widget de escritorio/);        // se explica dónde SÍ se ve el detalle
-  assert.doesNotMatch(html, /SIN DATOS/);            // y NO la caja de error cruda
+  assert.match(html, /NO responde/);                    // el sondeo (host-down) sobrevive
+  assert.match(html, /no responde por su socket/);      // el copy honesto del nuevo motivo
+  assert.doesNotMatch(html, /sesión de usuario del host/); // ya NO afirma el framing viejo/erróneo
+  assert.doesNotMatch(html, /SIN DATOS/);               // y NO la caja de error cruda
 });
 
 test('con vista del host se pinta el estado detallado completo, y el sondeo arriba', async () => {

@@ -66,6 +66,9 @@ const REASON_TEXT = {
   'script-no-encontrado': 'los helpers del broker (broker-scan.sh / broker-knobs.sh) no están en este host',
   'ejecucion-fallo': 'no se pudieron ejecutar los helpers del broker',
   'json-invalido': 'los helpers del broker devolvieron algo que no es JSON',
+  // El broker no contesta por su socket: el scan/knobs se ejecutan A TRAVÉS del propio broker (canal /run),
+  // así que si no responde, no hay estado detallado ni escritura posibles hasta que vuelva.
+  'broker-inalcanzable': 'el broker no responde por su socket',
 };
 
 const RANGE_LABELS = ['hoy', '7d', '30d', '∞'];
@@ -91,6 +94,14 @@ const _broker = makeEndpointState();
 let _brokerSondeo = null;   // el modo REAL sondeando al broker (container/host/host-down): la ÚNICA
                             // verdad del broker que axon puede afirmar cuando corre contenerizado.
 const _brokerKnobs = makeEndpointState();
+// Estado de EDICIÓN de la pestaña Broker (ya no es puramente read-only: knobs con `gui:edita` se
+// escriben por PUT /api/cortex/broker/knobs y el servicio se reinicia por POST .../restart, ambos
+// ruteados por el canal /run del broker — corre como el usuario del host, ver axon #187).
+let _brokerBusy = false;        // hay un PUT de knob en vuelo (deshabilita los controles)
+let _brokerRestarting = false;  // hay un restart despachado, esperando el re-sondeo
+let _brokerStatus = null;       // { text, tone: ''|'ok'|'warn'|'error' } — última línea de feedback
+const _brokerDirty = new Map(); // env -> valor tecleado sin guardar aún (sobrevive al re-render del poll)
+const _brokerPendingRestart = new Set(); // envs guardados esperando reinicio para APLICAR
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => (
@@ -648,22 +659,72 @@ function fmtBytes(n) {
   return (i === 0 ? Math.round(v) : v.toFixed(1)) + ' ' + u[i];
 }
 
-// El valor EFECTIVO de un knob: `actual` es lo escrito en el .env, y `null` significa "no está puesto"
-// ⇒ manda el default del código. Esa distinción se muestra, no se aplana: saber que un valor viene del
-// default es justo lo que dice si tocarlo o no.
-function knobRowHtml(k) {
-  const enDefault = k.actual == null || String(k.actual).length === 0;
-  const valor = enDefault ? k.default : k.actual;
-  const candado = k.gui === 'lee' ? '<span class="cortex-knob-lock" title="Solo lectura en toda GUI">🔒</span>' : '';
+// `actual` es lo escrito en el .env, y `null`/'' significa "no está puesto" ⇒ manda el default del código.
+function knobEnDefault(k) { return k.actual == null || String(k.actual).length === 0; }
+function knobEffective(k) { const d = knobEnDefault(k); return d ? k.default : k.actual; }
+
+// Los tres tipos NUMÉRICOS del spec (broker-knobs.tsv) → <input type=number>; ruta/texto → <input text>.
+function knobIsNumeric(k) { return k.tipo === 'entero' || k.tipo === 'bytes' || k.tipo === 'ms'; }
+
+// El control editable de UN knob. `shown` = lo que se pinta en la caja (el dirty si lo hay, si no el
+// efectivo). data-broker-knob + data-env lo hacen encontrable por la delegación (guardar / capturar dirty).
+function knobCtrlHtml(k, shown) {
+  const val = shown == null ? '' : String(shown);
+  const ph = k.default == null ? 'sin default' : ('default: ' + k.default);
+  const common = `class="settings-select cortex-knob-input" data-broker-knob data-env="${esc(k.env)}"`
+    + ` value="${esc(val)}" placeholder="${esc(ph)}"${_brokerBusy ? ' disabled' : ''}`;
+  if (knobIsNumeric(k)) {
+    // `cero_apaga` deja el 0 como válido (APAGA el mecanismo) aunque el mínimo del spec sea mayor.
+    const min = k.cero_apaga ? 0 : (k.min == null ? null : k.min);
+    const max = k.max == null ? null : k.max;
+    const attrs = (min != null ? ` min="${esc(min)}"` : '') + (max != null ? ` max="${esc(max)}"` : '');
+    return `<input type="number" step="1" inputmode="numeric" ${common}${attrs}>`;
+  }
+  return `<input type="text" autocomplete="off" spellcheck="false" ${common}>`;
+}
+
+// Knob EDITABLE (gui:edita): control + Guardar + (si está puesto en .env) ↩ default. Los estados NO mienten
+// —espejo de axonConfig—: al guardar, el knob queda "pendiente de reinicio", no "aplicado" (el broker lee su
+// env AL ARRANCAR, de ahí el botón Reiniciar). El valor tecleado sobrevive al re-render vía _brokerDirty.
+function knobRowEditableHtml(k) {
+  const enDefault = knobEnDefault(k);
+  const dirty = _brokerDirty.has(k.env);
+  const shown = dirty ? _brokerDirty.get(k.env) : (knobEffective(k) == null ? '' : knobEffective(k));
+  const marca = enDefault ? '<span class="cortex-knob-tag">default</span>' : '<span class="cortex-knob-tag set">.env</span>';
+  const reinicio = k.reinicio ? '<span class="cortex-knob-tag">requiere reinicio</span>' : '';
+  const pending = _brokerPendingRestart.has(k.env) ? '<span class="cortex-knob-tag pending">⟳ pendiente de reinicio</span>' : '';
+  const dis = _brokerBusy ? ' disabled' : '';
+  let html = `<div class="cortex-knob-row${dirty ? ' cortex-knob-dirty' : ''}">`
+    + `<div class="cortex-knob-head"><span class="cortex-knob-label">${esc(k.etiqueta)}</span>${marca}${reinicio}${pending}</div>`
+    + '<div class="cortex-knob-edit">'
+    +   knobCtrlHtml(k, shown)
+    +   `<button type="button" class="axoncfg-btn axoncfg-btn-primary cortex-knob-btn" data-action="broker-knob-save" data-env="${esc(k.env)}"${dis}>Guardar</button>`
+    +   (enDefault ? '' : `<button type="button" class="axoncfg-btn axoncfg-btn-ghost cortex-knob-btn" data-action="broker-knob-unset" data-env="${esc(k.env)}"${dis}>↩ default</button>`)
+    + '</div>'
+    + `<div class="cortex-knob-env">${esc(k.env)}</div>`;
+  if (k.ayuda) html += `<div class="cortex-knob-help">${esc(k.ayuda)}</div>`;
+  if (k.advertencia) html += `<div class="cortex-knob-warn">⚠ ${esc(k.advertencia)}</div>`;
+  return html + '</div>';
+}
+
+// Knob de SOLO LECTURA (gui:lee): PORT/BIND/SOCKET/HOME son el contrato con el cliente o una superficie de
+// seguridad; broker-knobs.sh RECHAZA escribirlos desde cualquier GUI (su regla 1). Se muestran, no se editan.
+function knobRowReadonlyHtml(k) {
+  const enDefault = knobEnDefault(k);
+  const valor = knobEffective(k);
   const marca = enDefault ? '<span class="cortex-knob-tag">default</span>' : '<span class="cortex-knob-tag set">.env</span>';
   const reinicio = k.reinicio ? '<span class="cortex-knob-tag">requiere reinicio</span>' : '';
   let html = '<div class="cortex-knob-row">'
-    + `<div class="cortex-knob-head"><span class="cortex-knob-label">${esc(k.etiqueta)}</span>${candado}${marca}${reinicio}</div>`
+    + `<div class="cortex-knob-head"><span class="cortex-knob-label">${esc(k.etiqueta)}</span><span class="cortex-knob-lock" title="Solo lectura en toda GUI">🔒</span>${marca}${reinicio}</div>`
     + `<div class="cortex-knob-value">${esc(valor == null ? '—' : valor)}</div>`
     + `<div class="cortex-knob-env">${esc(k.env)}</div>`;
   if (k.ayuda) html += `<div class="cortex-knob-help">${esc(k.ayuda)}</div>`;
   if (k.advertencia) html += `<div class="cortex-knob-warn">⚠ ${esc(k.advertencia)}</div>`;
   return html + '</div>';
+}
+
+function knobRowHtml(k) {
+  return k.gui === 'edita' ? knobRowEditableHtml(k) : knobRowReadonlyHtml(k);
 }
 
 // El SONDEO es lo único del broker que axon puede afirmar cuando corre contenerizado: le habla por el
@@ -682,27 +743,39 @@ function sondeoPanelHtml(sondeo) {
     + '</div></div>';
 }
 
+// Línea de feedback de guardado/reinicio (compartida por save de knob y por restart). Espeja las clases
+// de estado de axonConfig para no mentir sobre el resultado (ok / requiere-reinicio / error).
+function brokerStatusHtml() {
+  if (!_brokerStatus || !_brokerStatus.text) return '';
+  const t = _brokerStatus.tone;
+  const cls = t === 'error' ? ' axoncfg-status-error' : t === 'warn' ? ' axoncfg-status-warn' : t === 'ok' ? ' axoncfg-status-ok' : '';
+  return `<div class="axoncfg-status${cls}">${esc(_brokerStatus.text)}</div>`;
+}
+
 function renderBrokerTab() {
   let html = '<div class="hs-section-label">[ BROKER DE TERMINAL ]</div>';
   html += '<div class="cortex-usage-caption" style="margin-bottom:12px">'
-    + 'El servicio del HOST que ejecuta los comandos de esta terminal. Vista de SOLO LECTURA — '
-    + 'arrancar/parar el servicio y editar los knobs vive en el widget de escritorio.'
+    + 'El servicio del HOST que ejecuta los comandos de esta terminal. Los knobs marcados editables se '
+    + 'guardan aquí (aplican al REINICIAR el servicio, con el botón de abajo); los de contrato/seguridad '
+    + '(🔒) se editan a mano en el .env del host.'
     + '</div>';
 
   // El sondeo va primero y siempre que exista (incluso si el estado detallado no se pudo leer).
   html += sondeoPanelHtml(_brokerSondeo);
+  // El feedback de guardado/reinicio va arriba para verse pase lo que pase con el estado detallado.
+  html += brokerStatusHtml();
 
   if (_broker.status !== 'ok' || !_broker.data) {
     if (_broker.status === 'idle' || _broker.status === 'loading') {
       html += '<div class="hoststats-loading">[ ESCANEANDO… ]</div>';
-    } else if (_broker.reason === 'sin-vista-del-host') {
-      // NO es un error: axon corre contenerizado y no ve la sesión de usuario del host, así que el
-      // estado DETALLADO (servicio, knobs) solo se lee en el widget de escritorio. El sondeo de arriba
-      // ya dijo lo esencial. Se explica en vez de mostrar una caja de "sin datos" que asustaría.
-      html += '<div class="cortex-usage-caption" style="opacity:0.6;margin-top:4px">'
-        + 'El estado detallado del servicio y los knobs no se pueden leer desde aquí: axon corre '
-        + 'contenerizado, sin acceso a la sesión de usuario del host. Esa vista vive en el widget de '
-        + 'escritorio (KDE). Lo que sí se puede afirmar — si el broker responde — está arriba.'
+    } else if (_broker.reason === 'broker-inalcanzable') {
+      // El scan/knobs se ejecutan A TRAVÉS del broker (canal /run); si no responde por su socket, no hay
+      // estado detallado ni escritura hasta que vuelva. NO es "axon no ve el host": el broker ES el acceso
+      // al host, y lo que falla es que el SERVICIO no contesta. Se dice sin contradecir el sondeo de arriba.
+      html += '<div class="cortex-usage-caption" style="opacity:0.7;margin-top:4px">'
+        + 'El broker no responde por su socket, así que su estado detallado y sus knobs no se pueden leer '
+        + 'ni editar ahora mismo. Revisa que el servicio esté corriendo en el host; el sondeo de arriba '
+        + 'refleja lo último que se pudo afirmar.'
         + '</div>';
     } else {
       html += emptyStateInner(stateMessage(_broker));
@@ -724,7 +797,13 @@ function renderBrokerTab() {
     + statCardHtml('Memoria', fmtBytes(u.memoria_bytes))
     + '</div>';
 
-  html += '<div class="hs-section-label">[ SERVICIO ]</div>';
+  // [ SERVICIO ] con el botón REINICIAR: resuelve la queja "dice pendiente de reinicio pero NO HAY BOTÓN".
+  // Reiniciar recicla el servicio (detached, vía /run) y re-sondea tras un delay para refrescar el estado.
+  const restartLabel = _brokerRestarting ? 'reiniciando…' : '⟳ Reiniciar servicio';
+  html += '<div class="cortex-broker-serv-head">'
+    + '<span class="hs-section-label" style="margin:0">[ SERVICIO ]</span>'
+    + `<button type="button" class="axoncfg-btn cortex-broker-restart" data-action="broker-restart"${(_brokerRestarting || _brokerBusy) ? ' disabled' : ''}>${esc(restartLabel)}</button>`
+    + '</div>';
   html += '<div class="cortex-dot-list">'
     + `<div class="cortex-dot-row"><span class="cortex-dot">●</span><span class="cortex-dot-name">${esc(u.nombre || '—')}</span></div>`
     + (u.desde ? `<div class="cortex-dot-row"><span class="cortex-dot">●</span><span class="cortex-dot-name">activo desde ${esc(u.desde)}</span></div>` : '')
@@ -812,6 +891,92 @@ function loadBrokerAndRender() {
   });
 }
 
+// ---------- Escritura de la pestaña Broker (PUT knobs / POST restart, vía axon #187) ----------
+// Un fetch que devuelve el JSON del cuerpo AUNQUE el status sea 4xx/5xx: los fallos de estos endpoints
+// (validación 400, broker caído/rechazo del helper 502) traen el detalle EN EL CUERPO — `fetchJson`
+// tiraría antes de poder leerlo, así que aquí no.
+async function brokerWrite(url, method, body) {
+  const opts = { method, credentials: 'same-origin', headers: { Accept: 'application/json' } };
+  if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
+  const r = await fetch(url, opts);
+  let data = null;
+  try { data = await r.json(); } catch (e) { data = null; }
+  return { httpOk: r.ok, status: r.status, data };
+}
+
+// El texto legible de un fallo: el stderr del helper (`error`) es lo más útil; si no, el `reason` mapeado.
+function brokerFailText(d) {
+  if (!d) return 'sin respuesta del servidor';
+  if (d.error) return String(d.error);
+  if (d.reason) return REASON_TEXT[d.reason] || String(d.reason);
+  return 'error desconocido';
+}
+
+function brokerKnobByEnv(env) {
+  const kn = _brokerKnobs.data && Array.isArray(_brokerKnobs.data.knobs) ? _brokerKnobs.data.knobs : [];
+  return kn.find((k) => k && k.env === env) || null;
+}
+
+// Guarda (set) o resetea (unset) UN knob. Éxito ⇒ el knob NO se aplicó todavía (broker lee su env al
+// arrancar): se marca "pendiente de reinicio", nunca "aplicado". Fallo ⇒ se conserva el valor tecleado
+// (dirty) para que el usuario lo corrija, y se muestra el stderr del helper tal cual.
+async function saveBrokerKnob(env, body, etiqueta) {
+  if (_brokerBusy || _brokerRestarting) return;
+  _brokerBusy = true;
+  _brokerStatus = { text: 'guardando…', tone: '' };
+  if (_activeTab === 'broker') renderActiveTab();
+  try {
+    const { data } = await brokerWrite('/api/cortex/broker/knobs', 'PUT', body);
+    if (data && data.ok === true) {
+      _brokerDirty.delete(env);
+      if (data.requiresRestart) _brokerPendingRestart.add(env);
+      const cómo = body.unset ? 'vuelto a default' : 'guardado';
+      _brokerStatus = { text: `💾 ${etiqueta}: ${cómo} — pendiente de REINICIAR el servicio para aplicar`, tone: 'warn' };
+      // Refresca para que la marca .env/default y el valor efectivo reflejen lo escrito.
+      await refreshBroker();
+    } else {
+      _brokerStatus = { text: `✗ ${etiqueta}: no se guardó — ${brokerFailText(data)}`, tone: 'error' };
+    }
+  } catch (e) {
+    _brokerStatus = { text: `✗ ${etiqueta}: error de red al guardar — ${(e && e.message) || e}`, tone: 'error' };
+  } finally {
+    _brokerBusy = false;
+    if (_activeTab === 'broker') renderActiveTab();
+  }
+}
+
+// Reinicia el servicio del broker. El POST regresa {ok,restarting} de inmediato (el servicio se recicla
+// detached); re-sondeamos tras ~2.5s para refrescar el estado y, si volvió a responder, dar por APLICADOS
+// los knobs que estaban pendientes.
+async function restartBroker() {
+  if (_brokerRestarting || _brokerBusy) return;
+  _brokerRestarting = true;
+  _brokerStatus = { text: 'reiniciando el servicio…', tone: 'warn' };
+  if (_activeTab === 'broker') renderActiveTab();
+  try {
+    const { data } = await brokerWrite('/api/cortex/broker/restart', 'POST', undefined);
+    if (data && data.ok === true && data.restarting) {
+      _brokerStatus = { text: 'reinicio despachado — re-sondeando en ~3s…', tone: 'warn' };
+      if (_activeTab === 'broker') renderActiveTab();
+      await new Promise((res) => setTimeout(res, 2500));
+      await refreshBroker();
+      if (_broker.status === 'ok') {
+        _brokerPendingRestart.clear();
+        _brokerStatus = { text: '✓ servicio reiniciado y respondiendo — los cambios ya aplican', tone: 'ok' };
+      } else {
+        _brokerStatus = { text: 'reinicio despachado; el broker aún no responde — se re-sondeará en el próximo refresco', tone: 'warn' };
+      }
+    } else {
+      _brokerStatus = { text: `✗ no se pudo reiniciar — ${brokerFailText(data)}`, tone: 'error' };
+    }
+  } catch (e) {
+    _brokerStatus = { text: `✗ error de red al reiniciar — ${(e && e.message) || e}`, tone: 'error' };
+  } finally {
+    _brokerRestarting = false;
+    if (_activeTab === 'broker') renderActiveTab();
+  }
+}
+
 // ---------- Dispatch de render + rail ----------
 function renderActiveTab() {
   const body = $('cortex-body');
@@ -885,6 +1050,25 @@ function wireBodyDelegation() {
   const body = $('cortex-body');
   if (!body) return;
   body.addEventListener('click', (e) => {
+    // Acciones de escritura de la pestaña Broker (guardar/resetear knob, reiniciar servicio).
+    const actionEl = e.target.closest && e.target.closest('[data-action]');
+    if (actionEl) {
+      const action = actionEl.getAttribute('data-action');
+      const env = actionEl.getAttribute('data-env');
+      if (action === 'broker-restart') { restartBroker(); return; }
+      if (action === 'broker-knob-save') {
+        const row = actionEl.closest('.cortex-knob-row');
+        const inp = row && row.querySelector('[data-broker-knob]');
+        const k = brokerKnobByEnv(env);
+        if (inp && k) saveBrokerKnob(env, { env, value: String(inp.value) }, k.etiqueta || env);
+        return;
+      }
+      if (action === 'broker-knob-unset') {
+        const k = brokerKnobByEnv(env);
+        if (k) saveBrokerKnob(env, { env, unset: true }, k.etiqueta || env);
+        return;
+      }
+    }
     const pill = e.target.closest && e.target.closest('.cortex-range-pill');
     if (pill) {
       const idx = parseInt(pill.getAttribute('data-range'), 10);
@@ -899,6 +1083,14 @@ function wireBodyDelegation() {
         renderActiveTab();
       }
     }
+  });
+  // Captura el valor tecleado de un knob SIN re-render (no mueve el cursor): así una edición a medias
+  // sobrevive al re-render que dispara el poll de 30s (que re-pinta la pestaña activa desde el estado).
+  body.addEventListener('input', (e) => {
+    const inp = e.target.closest && e.target.closest('[data-broker-knob]');
+    if (!inp) return;
+    const env = inp.getAttribute('data-env');
+    if (env) _brokerDirty.set(env, inp.value);
   });
   _bodyDelegationWired = true;
 }
