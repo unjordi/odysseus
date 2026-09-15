@@ -41913,8 +41913,11 @@ body.settings-sidebar-resize-active {
   #hoststats-mode-switch { display: none !important; }
   /* #29(f): en teléfono el rail es overlay/hamburguesa y NO reflowea el chat (que
      es full-width). El bar docked debe seguir el viewport del chat (left:0), no
-     correrse cuando el rail se despliega y cambia --icon-rail-w. */
-  body.hoststats-compact-docked #hoststats-modal .modal-content.hs-mode-compact {
+     correrse cuando el rail se despliega y cambia --sidebar-w. La regla de docking
+     de escritorio (left = icon-rail-w + sidebar-w) empata especificidad con esta y
+     va DESPUÉS en el archivo, así que ganaba; se le suma `.hoststats-content` (el
+     bar tiene ambas clases) para subir la especificidad y ganar sin depender del orden. */
+  body.hoststats-compact-docked #hoststats-modal .modal-content.hoststats-content.hs-mode-compact {
     left: 0 !important;
   }
 }
@@ -41966,6 +41969,9 @@ body.hoststats-compact-docked #hoststats-modal { pointer-events: none; }
 body.hoststats-compact-docked #hoststats-modal .modal-content { pointer-events: auto; }
 
 /* Host Stats sits above other tool windows like Cookbook does. */
+/* #29(f): en compact-docked el bar cede su z-index al rail — lo baja hostStats.js:syncDock()
+   (a 262, bajo el backdrop 390 y el rail 400), porque el modal manager le deja un z-index
+   inline con !important que un selector CSS no puede ganar. */
 #hoststats-modal { z-index: 262; }
 
 /* ============================================================
