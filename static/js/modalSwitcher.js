@@ -59,6 +59,51 @@ export function buildSwitcher(openList, labels, activeId) {
 }
 
 /**
+ * Filtra y ORDENA los descriptores de ventana (leídos en vivo del DOM por el
+ * caller — ver modalManager.openToolWindows) para quedarse EXACTAMENTE con las
+ * ventanas-herramienta SWITCHEABLES, en el shape que consume buildSwitcher.
+ *
+ * Criterio de "ventana switcheable" (#29f) — una ventana que el usuario puede
+ * ENFOCAR ahora mismo:
+ *   1. es una ventana-herramienta real (no un diálogo de confirmación): el caller
+ *      lo marca con `isToolWindow` (en el DOM: `.modal` con `_hasEdgeDock`, que
+ *      windowDrag pone en las ventanas arrastrables, o `.research-overlay`);
+ *   2. está en el DOM (si el caller no la enumeró, no existe — así los fantasmas
+ *      de la PERSISTENCIA, p. ej. un `doc-panel` con `open:true` heredado de otra
+ *      sesión, ya no se cuelan: la fuente es el DOM vivo, no workspaceState);
+ *   3. está ABIERTA (visible) O MINIMIZADA — la minimizada se lista para poder
+ *      restaurarla desde el switcher; solo se OMITE la que está oculta y NO
+ *      minimizada (esa está cerrada de verdad).
+ *
+ * Devuelve `[{ id, module, minimized }]` ordenado por z ASCENDENTE (atrás→frente,
+ * el mismo sentido "restore order = z-order" que usa openInstances), con
+ * desempate estable por el orden de entrada. NUNCA lanza.
+ *
+ * @param {Array} descriptors `[{ id, module, isToolWindow, hidden, minimized, display, z }]`
+ */
+export function selectSwitchableWindows(descriptors) {
+  if (!Array.isArray(descriptors)) return [];
+  const kept = [];
+  for (const d of descriptors) {
+    if (d === null || typeof d !== 'object') continue;
+    if (typeof d.id !== 'string' || d.id.length === 0) continue;
+    if (d.isToolWindow !== true) continue;            // fuera diálogos de confirmación
+    const minimized = d.minimized === true;
+    const hidden = d.hidden === true || d.display === 'none';
+    if (!minimized && hidden) continue;               // cerrada de verdad → fuera
+    kept.push(d);
+  }
+  // Array.prototype.sort es estable en Node/V8 modernos → el desempate por
+  // orden de entrada se conserva para z iguales (terminales con z estático).
+  kept.sort((a, b) => (Number(a.z) || 0) - (Number(b.z) || 0));
+  return kept.map((d) => ({
+    id: d.id,
+    module: (typeof d.module === 'string' && d.module.length > 0) ? d.module : d.id,
+    minimized: d.minimized === true,
+  }));
+}
+
+/**
  * Índice del id actual en la lista del switcher, o -1 si no está / lista vacía.
  * (Helper interno, exportado para test.)
  */
@@ -96,4 +141,4 @@ export function prevInSwitcher(list, currentId) {
   return list[(i - 1 + list.length) % list.length].id;
 }
 
-export default { buildSwitcher, indiceDe, nextInSwitcher, prevInSwitcher };
+export default { buildSwitcher, selectSwitchableWindows, indiceDe, nextInSwitcher, prevInSwitcher };

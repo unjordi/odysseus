@@ -59,6 +59,11 @@ def _run_tile_case():
         const settingsModal = {{ id: 'settings-modal' }};
         const settingsContent = {{ closest() {{ return settingsModal; }} }};
 
+        // Modal dock-capaz (windowDrag le pone `_hasEdgeDock`): tileManager cede
+        // L/R al edge-dock de modalSnap → excludeSides=true.
+        const dockModal = {{ id: 'terminal-modal', _hasEdgeDock: true }};
+        const dockContent = {{ closest() {{ return dockModal; }} }};
+
         console.log(JSON.stringify({{
           fullscreen: pick(mod._zoneForPointerForTests(500, 0)),
           maximize: pick(mod._zoneForPointerForTests(500, 8)),
@@ -69,6 +74,17 @@ def _run_tile_case():
           memoryBottom: pick(mod._zoneForContentForTests(memoryContent, 500, 790)),
           settingsTop: pick(mod._zoneForContentForTests(settingsContent, 500, 20)),
           settingsRight: pick(mod._zoneForContentForTests(settingsContent, 1190, 300)),
+          // excludeSides: L/R se ceden pero el resto de zonas se conservan.
+          exLeft: pick(mod._zoneForPointerForTests(20, 300, true)),
+          exRight: pick(mod._zoneForPointerForTests(1190, 300, true)),
+          exTop: pick(mod._zoneForPointerForTests(500, 20, true)),
+          exBottom: pick(mod._zoneForPointerForTests(500, 790, true)),
+          exMax: pick(mod._zoneForPointerForTests(500, 8, true)),
+          exFull: pick(mod._zoneForPointerForTests(500, 0, true)),
+          // Un modal dock-capaz cede L/R también vía _zoneForContent(excludeSides).
+          dockLeft: pick(mod._zoneForContentForTests(dockContent, 20, 300, true)),
+          dockRight: pick(mod._zoneForContentForTests(dockContent, 1190, 300, true)),
+          dockTop: pick(mod._zoneForContentForTests(dockContent, 500, 20, true)),
         }}));
         """
     )
@@ -115,3 +131,31 @@ def test_regular_tool_modals_are_not_limited_to_fullscreen_only():
     assert zones["memoryBottom"]["name"] == "bottom-half"
     assert zones["settingsTop"] is None
     assert zones["settingsRight"]["name"] == "right-half"
+
+
+@pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
+def test_edge_dock_capable_modal_yields_left_right_to_modalsnap():
+    """Bug #29 — dos sistemas de edge-dock competían en el mismo drag-release.
+
+    Con la reconciliación, un modal dock-capaz (marcado `_hasEdgeDock` por
+    windowDrag) hace que tileManager CEDA las zonas left-half/right-half al
+    edge-dock de modalSnap (fuente única de verdad del edge-dock), pero
+    conserva top/bottom/maximize/fullscreen, que modalSnap no cubre.
+    """
+    zones = _run_tile_case()
+
+    # L/R cedidas cuando excludeSides.
+    assert zones["exLeft"] is None
+    assert zones["exRight"] is None
+    assert zones["dockLeft"] is None
+    assert zones["dockRight"] is None
+    # El resto de zonas se conservan — NO se pierde funcionalidad.
+    assert zones["exTop"]["name"] == "top-half"
+    assert zones["exBottom"]["name"] == "bottom-half"
+    assert zones["exMax"]["name"] == "maximize"
+    assert zones["exFull"]["name"] == "fullscreen"
+    assert zones["dockTop"]["name"] == "top-half"
+    # Sin excludeSides (p. ej. el drag del chip minimizado, único dueño ahí)
+    # las zonas L/R SIGUEN existiendo — no se rompió el otro camino.
+    assert zones["left"]["name"] == "left-half"
+    assert zones["right"]["name"] == "right-half"

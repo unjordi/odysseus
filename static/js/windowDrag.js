@@ -99,6 +99,22 @@ export function makeWindowDraggable(modal, options = {}) {
   // modal that should only dock right.
   const leftDock = (enableDock && options.enableLeftDock !== false) ? makeEdgeDockController(modal, 'left') : null;
 
+  // #29 bug — DOS sistemas de edge-dock competían en el MISMO drag-release:
+  // este (windowDrag→modalSnap) y tileManager.js (su listener global de puntero
+  // sobre .modal-header). Ambos disparaban al soltar cerca del borde L/R y se
+  // pisaban el estado (el modal quedaba con `modal-*-docked` Y `data-_tile-zone`,
+  // el body con `--*-dock-w` residual → al tilar derecha una terminal y luego
+  // izquierda otra, se acumulaban y "se super rompía"). FUENTE ÚNICA DE VERDAD
+  // del edge-dock L/R = modalSnap (el sistema rico: colapso de sidebar, ancho
+  // reservado consumido por otros paneles, handles de resize, dock chips). Se
+  // MARCA el modal como dock-capaz para que tileManager CEDA sus zonas
+  // left-half/right-half en el drag del header (conserva top/bottom/max/
+  // fullscreen, que este sistema no cubre — windowDrag ya cede su fullscreen a
+  // tileManager con enableFullscreen=false: división de labor simétrica).
+  if (modal && (rightDock || leftDock)) {
+    try { modal._hasEdgeDock = true; } catch (_) {}
+  }
+
   // Per-drag state, reset on mousedown.
   let dragging = false;
   let startX = 0, startY = 0;
