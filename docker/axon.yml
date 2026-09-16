@@ -100,7 +100,7 @@ services:
       # FreeToken (motor MoE gpt-oss-120b, OpenAI-compat). Hoy vive NATIVO y BAJO DEMANDA (systemd user,
       # `disabled`): AUSENTE ES EL CASO NORMAL, no un error — axon lo detecta por /v1/models y degrada al
       # carril Ollama sin ruido (src/freetoken-capabilities.ts). host.docker.internal alcanza al host.
-      # Ver docs/stack-unificado.md § FreeToken para por qué NO está contenerizado todavía.
+      # Ver stack/stack-unificado.md § FreeToken para por qué NO está contenerizado todavía.
       - AXON_FREETOKEN_URL=${AXON_FREETOKEN_URL:-http://host.docker.internal:7090}
       # Frontera (Anthropic). Opcional: sin key axon sigue en carril local. NUNCA horneada en la imagen.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
@@ -116,7 +116,7 @@ services:
       - AXON_ODYSSEUS_WORKSPACE=${AXON_ODYSSEUS_WORKSPACE:-1}
       # ── TERMINAL: el widget ejecuta en el HOST como el usuario real, no como root en el contenedor ──
       # El broker (axon-term-broker.service) sigue NATIVO en el host a propósito — ver
-      # docs/stack-unificado.md § La terminal.
+      # stack/stack-unificado.md § La terminal.
       #
       # ⚠️ EL TRANSPORTE ES UN SOCKET UNIX, NO UN PUERTO (arreglado 2026-09-07; antes esto decía
       # `http://host.docker.internal:8799` y la terminal estaba MUERTA). Dos correcciones de fondo:
