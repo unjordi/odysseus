@@ -260,7 +260,7 @@ services:
       # Se comprueba el CONTENIDO, no solo el código: ntfy responde 200 a rutas que no prueban nada.
       # La imagen es Alpine/busybox → trae wget (no curl); `grep -q` sobre el JSON es todo lo que hace falta.
       test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/v1/health | grep -q '\"healthy\":true'"]
-      # interval 30s: NADIE depende de ntfy (ver el grafo en docs/stack-unificado.md). Su healthcheck existe
+      # interval 30s: NADIE depende de ntfy (ver el grafo en stack/stack-unificado.md). Su healthcheck existe
       # para que `docker compose ps` diga la verdad, no para desbloquear a otro servicio → no urge medirlo seguido.
       interval: 30s
       timeout: 5s

@@ -115,7 +115,7 @@ services:
       #   correcto para un chequeo caro: una vez por despliegue, no cada 30 segundos.
       # (No verificado en esta pasada: no se levantó la imagen GPU — el stack corre la CPU por default.)
       test: ["CMD", "python", "-c", "import json,urllib.request,sys; d=json.load(urllib.request.urlopen('http://localhost:8880/v1/audio/voices', timeout=5)); sys.exit(0 if d.get('voices') else 1)"]
-      # interval 30s: NADIE depende del TTS (ver el grafo en docs/stack-unificado.md) — su salud es
+      # interval 30s: NADIE depende del TTS (ver el grafo en stack/stack-unificado.md) — su salud es
       # informativa, no gatea el arranque de nadie. No hace falta medirla seguido.
       interval: 30s
       timeout: 10s
