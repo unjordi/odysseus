@@ -108,6 +108,12 @@ services:
       # La ruta es la de DENTRO del contenedor; el bind de abajo la ata al mismo `data/` de Odysseus.
       - AXON_ODYSSEUS_DB=/odysseus-data/app.db
       - AXON_ODYSSEUS_OWNER=${AXON_ODYSSEUS_OWNER:-unjordi}
+      # Cara ODYSSEUS del working space aislado: cada chat corre en SU working folder (odysseus-workspace.ts)
+      # en vez del cwd compartido `/workspace` — el hueco del misterio Mazda3 (un agente escribía en la raíz).
+      # ON por default en axon; `0` = kill-switch de REVERT (vuelve al cwd compartido). Explícito aquí para
+      # que el revert sea una línea del .env, sin recompilar. La BASE de los folders es el default de axon
+      # (HOME/odysseus-agents = /home/node/odysseus-agents), atado al host por el bind de abajo.
+      - AXON_ODYSSEUS_WORKSPACE=${AXON_ODYSSEUS_WORKSPACE:-1}
       # ── TERMINAL: el widget ejecuta en el HOST como el usuario real, no como root en el contenedor ──
       # El broker (axon-term-broker.service) sigue NATIVO en el host a propósito — ver
       # docs/stack-unificado.md § La terminal.
@@ -182,6 +188,15 @@ services:
       # dependa de /etc/passwd de la imagen base.
       - ${AXON_STATE_DIR:-${HOME}/.axon}:/home/node/.axon
       - ${AXON_CACHE_DIR:-${HOME}/.cache/axon}:/home/node/.cache/axon
+      # ── WORKING FOLDERS POR CHAT (cara Odysseus, AXON_ODYSSEUS_WORKSPACE) ────────────────────────
+      # Cada chat de Odysseus corre en `~/odysseus-agents/.<sessionId>/` (real, oculto) + un symlink por
+      # nombre — así el humano VE en `~/odysseus-agents/` los folders de sus chats por nombre legible, en
+      # vez de que un agente escriba en la raíz de axon (misterio Mazda3). BIND AL HOST (no volumen nombrado)
+      # a propósito: el punto es que el humano los abra desde su home. Destino = HOME/odysseus-agents (HOME=
+      # /home/node), que es lo que resuelve el default de axon (odysseusAgentsBaseDir).
+      # ⚠️ El dir del host debe existir y ser del uid 1000 ANTES del `up` (si no, Docker lo crea root:root y
+      # el contenedor —uid 1000— no puede escribir → axon degrada al cwd compartido): `mkdir -p ~/odysseus-agents`.
+      - ${AXON_AGENTS_DIR:-${HOME}/odysseus-agents}:/home/node/odysseus-agents
       # ── DATOS DE CORTEX (widget "Claude · Cortex" del panel de Odysseus) ────────────────────────
       # Los 5 endpoints `/api/cortex/*` que sirve axon (quota/stats/chats/sessions/brain) leen el
       # filesystem del HOST — se escribieron cuando axon corría NATIVO, donde `$HOME` ERA el de unjordi.
