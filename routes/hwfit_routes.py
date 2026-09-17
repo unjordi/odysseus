@@ -3,12 +3,30 @@ import os
 import re
 import shlex
 import subprocess
+import threading
+import time
 from copy import deepcopy
 
 from fastapi import APIRouter, HTTPException
 
 from core.platform_compat import run_ssh_command
 from routes._validators import validate_remote_host, validate_ssh_port
+
+
+# #168 — El refresh de whichllm consulta HuggingFace + leaderboards en vivo y
+# tarda MINUTOS (budget 420s), pero app.py envuelve toda request con un
+# REQUEST_HARD_TIMEOUT=45s (asyncio.wait_for) → la respuesta HTTP se abortaba a
+# los 45s y el front mostraba "timeout" AUNQUE el subproceso completaba y sellaba
+# el catálogo. Solución: correrlo en un HILO de fondo y que el front sondee
+# /catalog-status. Este tracker es el estado compartido de ese job.
+_WHICHLLM_REFRESH = {
+    "state": "idle",          # idle | running | done | error
+    "started_at": None,       # epoch
+    "finished_at": None,      # epoch
+    "meta": None,             # el sello devuelto por refresh_whichllm_catalog
+    "error": None,            # str si state == error
+}
+_WHICHLLM_REFRESH_LOCK = threading.Lock()
 
 
 # Backends the manual hardware simulator accepts. Must stay a subset of what
@@ -235,6 +253,16 @@ def setup_hwfit_routes():
         except Exception as e:
             whichllm["available"] = False
             whichllm["error"] = str(e)
+        # #168 — estado del refresh en curso, para que el front sondee en vez de
+        # esperar en una request que el middleware corta a los 45s.
+        with _WHICHLLM_REFRESH_LOCK:
+            whichllm["refresh"] = {
+                "state": _WHICHLLM_REFRESH["state"],
+                "started_at": _WHICHLLM_REFRESH["started_at"],
+                "finished_at": _WHICHLLM_REFRESH["finished_at"],
+                "error": _WHICHLLM_REFRESH["error"],
+                "count": (_WHICHLLM_REFRESH["meta"] or {}).get("count") if _WHICHLLM_REFRESH["meta"] else None,
+            }
         sources.append(whichllm)
 
         return {"sources": sources, "active_total": len(load_catalog())}
@@ -268,16 +296,43 @@ def setup_hwfit_routes():
             kwargs["gpu"] = gpu
         if profile:
             kwargs["profile"] = profile
-        try:
-            meta = whichllm_catalog.refresh_whichllm_catalog(**kwargs)
-        except whichllm_catalog.WhichllmError as e:
-            # 503, not 500: the bundled catalog is still serving fine, the
-            # optional live source just isn't available right now.
-            raise HTTPException(503, str(e))
-        except Exception as e:
-            raise HTTPException(500, f"whichllm refresh failed: {e}")
-        reset_model_cache()
-        return {"source": "whichllm", "catalog": meta}
+
+        # #168 — Arranca el refresh en un HILO de fondo y responde YA, para no
+        # chocar con el REQUEST_HARD_TIMEOUT=45s del middleware (whichllm tarda
+        # minutos). El front sondea /catalog-status para ver cuándo terminó.
+        with _WHICHLLM_REFRESH_LOCK:
+            if _WHICHLLM_REFRESH["state"] == "running":
+                return {"source": "whichllm", "status": "running",
+                        "started_at": _WHICHLLM_REFRESH["started_at"]}
+            _WHICHLLM_REFRESH.update(
+                state="running", started_at=time.time(),
+                finished_at=None, meta=None, error=None,
+            )
+
+        def _run_refresh():
+            try:
+                meta = whichllm_catalog.refresh_whichllm_catalog(**kwargs)
+                reset_model_cache()
+                with _WHICHLLM_REFRESH_LOCK:
+                    _WHICHLLM_REFRESH.update(
+                        state="done", finished_at=time.time(), meta=meta, error=None,
+                    )
+            except whichllm_catalog.WhichllmError as e:
+                # La fuente opcional no está disponible; el catálogo bundled sigue sirviendo.
+                with _WHICHLLM_REFRESH_LOCK:
+                    _WHICHLLM_REFRESH.update(
+                        state="error", finished_at=time.time(), error=str(e),
+                    )
+            except Exception as e:  # noqa: BLE001
+                with _WHICHLLM_REFRESH_LOCK:
+                    _WHICHLLM_REFRESH.update(
+                        state="error", finished_at=time.time(),
+                        error=f"whichllm refresh failed: {e}",
+                    )
+
+        threading.Thread(target=_run_refresh, name="whichllm-refresh", daemon=True).start()
+        return {"source": "whichllm", "status": "started",
+                "started_at": _WHICHLLM_REFRESH["started_at"]}
 
     @router.get("/models")
     def get_models(use_case: str = "", sort: str = "newest", limit: int = 50, search: str = "", host: str = "", quant: str = "", ctx: str = "", gpu_count: str = "", gpu_group: str = "", ssh_port: str = "", platform: str = "", fresh: bool = False, refresh_catalog: bool = False, manual_mode: str = "", manual_gpu_count: str = "", manual_vram_gb: str = "", manual_ram_gb: str = "", manual_backend: str = "", ignore_detected_gpu: bool = False, ignore_detected_ram: bool = False, fit_only: bool = False):

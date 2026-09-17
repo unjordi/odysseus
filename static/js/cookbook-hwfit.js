@@ -627,22 +627,49 @@ export function _bindHwfitCatalogBar() {
       const label = btn.textContent;
       btn.disabled = true;
       btn.textContent = '⟳ Updating…';
-      if (msg) msg.textContent = 'querying HuggingFace + benchmark leaderboards…';
+      if (msg) { msg.textContent = 'querying HuggingFace + benchmark leaderboards…'; msg.style.color = ''; }
+      // #168 — el refresh corre en un HILO del backend (whichllm tarda minutos y
+      // el middleware corta toda request a 45s). El POST responde YA con
+      // {status: started|running}; luego SONDEAMOS /catalog-status hasta que el
+      // job del backend quede done/error, en vez de esperar en una request que
+      // el middleware abortaría con un "timeout" falso.
+      const _whichllmRefreshState = (status) =>
+        (status?.sources || []).find((s) => s?.key === 'whichllm')?.refresh || null;
       try {
         const res = await fetch('/api/hwfit/catalog/refresh?source=whichllm', { method: 'POST' });
         const body = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(body?.detail || body?.error || `HTTP ${res.status}`);
+        if (!res.ok) throw new Error(body?.detail || body?.error || `HTTP ${res.status}`);
+
+        // Poll hasta done/error. Tope ~10 min (200 × 3s); si sigue corriendo, se
+        // deja en background y el status lo reflejará al reabrir.
+        const POLL_MS = 3000;
+        const MAX_POLLS = 200;
+        let done = false;
+        for (let i = 0; i < MAX_POLLS && !done; i++) {
+          await new Promise((r) => setTimeout(r, POLL_MS));
+          let status = null;
+          try {
+            const sres = await fetch('/api/hwfit/catalog-status');
+            if (sres.ok) status = await sres.json();
+          } catch (_) { /* red hipo transitorio; sigue sondeando */ }
+          const ref = _whichllmRefreshState(status);
+          if (!ref) continue;
+          if (ref.state === 'done') {
+            done = true;
+            _renderCatalogStatus(status);
+            if (msg) { msg.textContent = `updated: ${ref.count || 0} models sealed`; msg.style.color = ''; }
+            // El catálogo cambió server-side → re-rankea la lista en pantalla.
+            _hwfitFetch(false);
+          } else if (ref.state === 'error') {
+            done = true;
+            throw new Error(ref.error || 'whichllm refresh failed');
+          }
+          // state === 'running' → sigue el mensaje "querying…"
         }
-        const meta = body?.catalog || {};
-        if (msg) {
-          msg.textContent = `updated: ${meta.count || 0} models sealed ${meta.generated_at_iso || ''}`;
+        if (!done && msg) {
+          msg.textContent = 'still updating in the background — reopen Cookbook to see the new seal';
           msg.style.color = '';
         }
-        await _hwfitRefreshCatalogStatus();
-        // The merged catalog changed server-side — re-rank so the list on
-        // screen matches the seal we just printed.
-        _hwfitFetch(false);
       } catch (e) {
         if (msg) {
           msg.textContent = String(e?.message || e);
