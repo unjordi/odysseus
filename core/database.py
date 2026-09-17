@@ -2731,6 +2731,33 @@ def archive_session(session_id: str):
             return True
     return False
 
+class MsTodoAccount(TimestampMixin, Base):
+    """A configured Microsoft To-Do account (OAuth2 via Microsoft identity platform v2.0).
+
+    Mirrors EmailAccount's OAuth token columns: oauth_access_token / oauth_refresh_token
+    are stored Fernet-encrypted via src/secret_storage.py. The key lives at data/.app_key
+    (mode 0o600, gitignored). Threat model: "stolen SQLite backup" rather than
+    "process compromise".
+    """
+    __tablename__ = "ms_todo_accounts"
+
+    id             = Column(String, primary_key=True, index=True)
+    owner          = Column(String, nullable=True, index=True)
+    name           = Column(String, nullable=False)  # Display name: "Work", "Personal", etc.
+    is_default     = Column(Boolean, default=False, nullable=False)
+    enabled        = Column(Boolean, default=True, nullable=False)
+
+    # OAuth2 (Microsoft identity platform v2.0). Tokens stored encrypted via secret_storage.
+    oauth_provider      = Column(String, nullable=True)   # "microsoft" or None
+    oauth_access_token  = Column(String, nullable=True)   # encrypted
+    oauth_refresh_token = Column(String, nullable=True)   # encrypted
+    oauth_token_expiry  = Column(String, nullable=True)   # unix timestamp string
+
+    __table_args__ = (
+        Index('ix_ms_todo_accounts_owner_default', 'owner', 'is_default'),
+    )
+
+
 # Initialize the database by creating all tables
 
 
