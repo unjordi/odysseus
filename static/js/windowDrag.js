@@ -89,6 +89,9 @@ export function makeWindowDraggable(modal, options = {}) {
       storageKey: options.resizeStorageKey
         || (modal && modal.id ? 'winsize-' + modal.id
           : (content.id ? 'winsize-' + content.id : null)),
+      // #29(e) CAPTURA — al terminar un resize, persistir la geometría final
+      // por el mismo camino que el fin del drag (never-throws).
+      onResizeEnd: () => { try { _captureGeometry(); } catch (_) {} },
     });
   }
 
@@ -292,6 +295,27 @@ export function makeWindowDraggable(modal, options = {}) {
       const r = content.getBoundingClientRect();
       try { onDragEnd({ rect: r }); } catch (_) {}
     }
+    // #29(e) CAPTURA — persistir la geometría final de la ventana-herramienta
+    // al terminar un arrastre. Never-throws: si no hay id, no es una ventana
+    // registrable, o WorkspaceState no está disponible, no hace nada.
+    _captureGeometry();
+  };
+
+  // Captura la geometría del content y la persiste vía WorkspaceState.setGeometry.
+  // Se define como closure para poder reutilizarla también al terminar un resize.
+  const _captureGeometry = () => {
+    try {
+      const id = (modal && modal.id) || content.id || null;
+      if (!id) return;
+      const r = content.getBoundingClientRect();
+      if (!r || !Number.isFinite(r.left) || !Number.isFinite(r.top)
+        || !Number.isFinite(r.width) || !Number.isFinite(r.height)) return;
+      const WS = (typeof globalThis !== 'undefined' && globalThis.WorkspaceState)
+        || (typeof window !== 'undefined' && window.WorkspaceState) || null;
+      if (WS && typeof WS.setGeometry === 'function') {
+        WS.setGeometry(id, { x: r.left, y: r.top, w: r.width, h: r.height });
+      }
+    } catch (_) { /* never-throws */ }
   };
 
   header.addEventListener('mousedown', (e) => {

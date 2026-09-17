@@ -22,6 +22,43 @@
 import * as Modals from './modalManager.js';
 import WorkspaceState from './workspaceState.js';
 
+// #29(e) RESTORE — aplicar la geometría persistida (rec.geom = {x,y,w,h}) al
+// .modal-content de una ventana ya reabierta, clampeada al viewport. Reusa el
+// mismo camino que el tiling (position:fixed + left/top/width/height sobre el
+// content). Una geom ausente/inválida → no toca nada (cero regresión).
+function _contentDe(modal) {
+  if (!modal) return null;
+  return modal.querySelector('.modal-content') || modal;
+}
+
+function _clampGeom(geom) {
+  const vw = (typeof window !== 'undefined' && window.innerWidth) || 1280;
+  const vh = (typeof window !== 'undefined' && window.innerHeight) || 800;
+  const MARGIN = 8;
+  let { x, y, w, h } = geom;
+  w = Math.max(120, Math.min(w, vw - MARGIN * 2));
+  h = Math.max(80, Math.min(h, vh - MARGIN * 2));
+  x = Math.max(MARGIN, Math.min(x, vw - w - MARGIN));
+  y = Math.max(MARGIN, Math.min(y, vh - h - MARGIN));
+  return { x, y, w, h };
+}
+
+function _applyGeom(modal, geom) {
+  if (!geom) return false;
+  const { x, y, w, h } = geom;
+  if (![x, y, w, h].every((n) => Number.isFinite(n))) return false;
+  const content = _contentDe(modal);
+  if (!content || !content.style) return false;
+  const c = _clampGeom({ x, y, w, h });
+  content.style.setProperty('position', 'fixed', 'important');
+  content.style.setProperty('left', c.x + 'px', 'important');
+  content.style.setProperty('top', c.y + 'px', 'important');
+  content.style.setProperty('width', c.w + 'px', 'important');
+  content.style.setProperty('height', c.h + 'px', 'important');
+  content.style.setProperty('max-height', c.h + 'px', 'important');
+  return true;
+}
+
 // Transient popovers that happen to be modal-shaped. Reopening these on every
 // load would be noise, not restoration.
 const NEVER_RESTORE = new Set([
@@ -60,12 +97,24 @@ export async function restoreWorkspace() {
     await WorkspaceState.ready();
     for (const rec of WorkspaceState.openInstances()) {
       if (NEVER_RESTORE.has(rec.id)) continue;
-      if (rec.minimized) continue;
-      if (_isVisible(document.getElementById(rec.id))) continue;
+      const modal = document.getElementById(rec.id);
+      if (_isVisible(modal)) continue;
       const btn = _launcherButton(rec.id);
       if (!btn) continue;                     // no launcher — not restorable yet
       try { btn.click(); } catch (e) { console.warn('[workspaceRestore] could not reopen', rec.id, e); }
       await _sleep(STAGGER_MS);
+      // #29(e) RESTORE — tras reabrir, aplicar la geometría persistida y, si la
+      // ventana estaba minimizada, devolverla a su chip. Todo never-throws:
+      // una geom ausente/inválida o un minimize fallido no rompen el restore.
+      try {
+        const live = document.getElementById(rec.id);
+        if (live) {
+          if (rec.geom) _applyGeom(live, rec.geom);
+          if (rec.minimized && typeof Modals.minimize === 'function') {
+            Modals.minimize(rec.id);
+          }
+        }
+      } catch (e) { console.warn('[workspaceRestore] geom/minimize restore failed', rec.id, e); }
     }
   } catch (e) {
     console.warn('[workspaceRestore] restore pass failed:', e);
