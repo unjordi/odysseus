@@ -38,6 +38,7 @@
 
 import { makeEdgeDockController } from './modalSnap.js';
 import { makeWindowResizable } from './windowResize.js';
+import WorkspaceState from './workspaceState.js';
 
 const SNAP_PX = 6;        // cursor distance from top edge for fullscreen snap
 const UNSNAP_PX = 24;     // cursor distance from top before fullscreen exits
@@ -310,10 +311,11 @@ export function makeWindowDraggable(modal, options = {}) {
       const r = content.getBoundingClientRect();
       if (!r || !Number.isFinite(r.left) || !Number.isFinite(r.top)
         || !Number.isFinite(r.width) || !Number.isFinite(r.height)) return;
-      const WS = (typeof globalThis !== 'undefined' && globalThis.WorkspaceState)
-        || (typeof window !== 'undefined' && window.WorkspaceState) || null;
-      if (WS && typeof WS.setGeometry === 'function') {
-        WS.setGeometry(id, { x: r.left, y: r.top, w: r.width, h: r.height });
+      // WorkspaceState es un módulo ES (default export), NO un global de window:
+      // importarlo directo (como el resto del shell) en vez de leerlo de window,
+      // que nunca se setea y dejaba la captura muerta en silencio (never-throws).
+      if (WorkspaceState && typeof WorkspaceState.setGeometry === 'function') {
+        WorkspaceState.setGeometry(id, { x: r.left, y: r.top, w: r.width, h: r.height });
       }
     } catch (_) { /* never-throws */ }
   };
