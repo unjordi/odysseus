@@ -14,8 +14,50 @@ import assert from 'node:assert/strict';
 // completo; sus imports de tileManager/workspaceState son nominales y no
 // ejecutan código de DOM al importar (solo definen funciones). Si el entorno
 // no tiene `document`, las funciones puras siguen siendo testables.
-import { claveDeEvento, slotParaClave, atajoDeEvento, ATAJOS } from '../static/js/tileShortcuts.js';
+import { claveDeEvento, slotParaClave, atajoDeEvento, ATAJOS, tileControlsHidden, setTileControlsHidden, injectSnapControls } from '../static/js/tileShortcuts.js';
 import { calcular, estadoInicial, FRACCIONES } from '../static/js/tileSlots.js';
+
+// ── #29 surfacing: toggle que OCULTA el botón de mosaico (los atajos de teclado NO se tocan) ──
+function conLocalStorage(fn) {
+  const store = new Map();
+  const prev = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem: (k) => (store.has(k) ? store.get(k) : null),
+    setItem: (k, v) => store.set(k, String(v)),
+    removeItem: (k) => store.delete(k),
+  };
+  try { fn(); } finally { globalThis.localStorage = prev; }
+}
+
+test('#29 default = mostrar (tileControlsHidden=false sin flag)', () => conLocalStorage(() => {
+  assert.equal(tileControlsHidden(), false);
+}));
+
+test('#29 tileControlsHidden refleja el flag de localStorage', () => conLocalStorage(() => {
+  globalThis.localStorage.setItem('ody-hide-tile-controls', '1');
+  assert.equal(tileControlsHidden(), true);
+  globalThis.localStorage.setItem('ody-hide-tile-controls', '0');
+  assert.equal(tileControlsHidden(), false);
+}));
+
+test('#29 injectSnapControls NO toca la ventana si el botón está oculto', () => conLocalStorage(() => {
+  globalThis.localStorage.setItem('ody-hide-tile-controls', '1');
+  let consultoHeader = false;
+  const modalStub = { querySelector: (sel) => { if (sel === '.modal-header') consultoHeader = true; return null; } };
+  injectSnapControls(modalStub); // debe RETORNAR antes de buscar el header
+  assert.equal(consultoHeader, false);
+}));
+
+test('#29 setTileControlsHidden persiste el flag (aplicación viva la QAea Chrome)', () => conLocalStorage(() => {
+  const prevDoc = globalThis.document;
+  globalThis.document = { querySelectorAll: () => [] }; // sin ventanas abiertas en el test
+  try {
+    setTileControlsHidden(true);
+    assert.equal(globalThis.localStorage.getItem('ody-hide-tile-controls'), '1');
+    setTileControlsHidden(false);
+    assert.equal(globalThis.localStorage.getItem('ody-hide-tile-controls'), '0');
+  } finally { globalThis.document = prevDoc; }
+}));
 
 // ── Mapeo atajo → slot ──
 

@@ -304,12 +304,32 @@ function _openSnapPopover(btn, modal) {
   document.addEventListener('keydown', _onPopoverEsc, true);
 }
 
+// #29 surfacing (decisión unjordi 2026-09-17): un toggle que OCULTA el botón visible de mosaico ("rehacer
+// los atajos cada vez suena pésimo, nomás queremos que se oculten"). Los ATAJOS DE TECLADO NO se tocan —
+// solo se esconde el botón ⊞ del header. Preferencia per-navegador en localStorage; default = mostrar.
+const HIDE_KEY = 'ody-hide-tile-controls';
+export function tileControlsHidden() {
+  try { return localStorage.getItem(HIDE_KEY) === '1'; } catch { return false; }
+}
+/** Persiste la preferencia y la APLICA EN VIVO a las ventanas abiertas (sin recargar). */
+export function setTileControlsHidden(hidden) {
+  try { localStorage.setItem(HIDE_KEY, hidden ? '1' : '0'); } catch { /* modo privado: efímero, no rompe */ }
+  if (hidden) {
+    document.querySelectorAll('.modal-tile-btn').forEach((b) => b.remove());
+  } else {
+    // Re-inyecta en cada ventana abierta (injectSnapControls es idempotente).
+    document.querySelectorAll('.modal-header').forEach((h) => injectSnapControls(h.parentElement));
+  }
+}
+
 /**
  * Inyecta el botón VISIBLE de mosaico en el header de un modal (#29d).
  * Idempotente. Se coloca a la izquierda del botón minimizar/cerrar.
+ * Respeta la preferencia #29 "ocultar controles de mosaico" (no inyecta si está activa).
  */
 export function injectSnapControls(modal) {
   if (!modal || !modal.querySelector) return;
+  if (tileControlsHidden()) return; // #29: el usuario ocultó el botón ⊞ (los atajos de teclado siguen vivos)
   const header = modal.querySelector('.modal-header');
   if (!header) return;
   if (header.querySelector('.modal-tile-btn')) return;
@@ -338,11 +358,21 @@ export function injectSnapControls(modal) {
   }
 }
 
+// #29: enlaza el checkbox del panel Settings→Shortcuts con la preferencia (refleja estado + aplica al cambiar).
+function _bindHideToggle() {
+  const cb = document.getElementById('tile-controls-hide');
+  if (!cb || cb.dataset.bound === '1') return;
+  cb.dataset.bound = '1';
+  cb.checked = tileControlsHidden();
+  cb.addEventListener('change', () => setTileControlsHidden(cb.checked));
+}
+
 let _registered = false;
 export function init() {
   if (_registered) return;
   _registered = true;
   document.addEventListener('keydown', _onKeydown, true);
+  _bindHideToggle();
 }
 
 if (typeof document !== 'undefined') {
