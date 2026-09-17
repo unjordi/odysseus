@@ -676,7 +676,14 @@ def setup_history_routes(session_manager, upload_handler=None) -> APIRouter:
 
             messages = session.get_context_messages()
             used = int(estimate_tokens(messages))
-            ctx_len = int(get_context_length(session.endpoint_url, session.model) or 0)
+            # #15 — a per-chat num_ctx override, when set, wins over the
+            # discovered context length so the pill reflects what the
+            # provider is actually being told to use.
+            ctx_len = int(
+                getattr(session, "num_ctx", None)
+                or get_context_length(session.endpoint_url, session.model)
+                or 0
+            )
             pct = round((used / ctx_len) * 100, 1) if ctx_len else 0.0
             pct = max(0.0, min(100.0, pct))
             visible_messages = sum(

@@ -60,6 +60,60 @@ import { loadPanel } from './panels.js';
   let _contextHeaderSeq = 0;
   let _contextHeaderData = null;
   let _contextHeaderBound = false;
+  // #15 — per-chat num_ctx (context window) override, keyed by session id.
+  // Kept in a module-level map (fast path) backed by localStorage (survives
+  // reloads). Value is one of:
+  //   undefined — never touched this session: omit the form field entirely
+  //               so the backend's "field absent" branch leaves whatever is
+  //               already persisted (e.g. from another client) untouched.
+  //   'auto'    — user explicitly cleared the override: send the literal
+  //               "auto" so the backend clears any stored override to None.
+  //   <number>  — user explicitly set an override: send it as-is.
+  let _numCtxOverrideBySession = {};
+  const NUM_CTX_OVERRIDE_LS_PREFIX = 'odysseus:numCtxOverride:';
+
+  function _loadNumCtxOverride(sid) {
+    if (!sid) return undefined;
+    if (Object.prototype.hasOwnProperty.call(_numCtxOverrideBySession, sid)) {
+      return _numCtxOverrideBySession[sid];
+    }
+    let value;
+    try {
+      const raw = localStorage.getItem(NUM_CTX_OVERRIDE_LS_PREFIX + sid);
+      if (raw === 'auto') {
+        value = 'auto';
+      } else if (raw) {
+        const parsed = parseInt(raw, 10);
+        if (Number.isFinite(parsed) && parsed > 0) value = parsed;
+      }
+    } catch (_) { /* private mode / blocked storage — treat as never touched */ }
+    _numCtxOverrideBySession[sid] = value;
+    return value;
+  }
+
+  // Numeric value for display (e.g. prefilling the popup input). null for
+  // "no numeric override" (never touched, or explicitly set to auto).
+  function _getNumCtxOverride(sid) {
+    const v = _loadNumCtxOverride(sid);
+    return (typeof v === 'number') ? v : null;
+  }
+
+  // The exact string to send as the `num_ctx` form field, or null to omit
+  // the field entirely (never touched this session).
+  function _getNumCtxOverrideForSend(sid) {
+    const v = _loadNumCtxOverride(sid);
+    if (v === undefined) return null;
+    return String(v);
+  }
+
+  function _setNumCtxOverride(sid, value) {
+    if (!sid) return;
+    const normalized = (Number.isFinite(value) && value > 0) ? Math.floor(value) : 'auto';
+    _numCtxOverrideBySession[sid] = normalized;
+    try {
+      localStorage.setItem(NUM_CTX_OVERRIDE_LS_PREFIX + sid, String(normalized));
+    } catch (_) { /* private mode / blocked storage — in-memory only for this tab */ }
+  }
   let _pendingToolApproval = null;
 
   function _submitToolApprovalWhenIdle(approvalId) {
@@ -211,6 +265,79 @@ import { loadPanel } from './panels.js';
       row.appendChild(b);
       popup.appendChild(row);
     });
+
+    // #15 — per-chat context window override: an input + Set/Auto so the
+    // user can force num_ctx for this chat instead of the discovered value.
+    const overrideSid = d.session_id || (_liveSessionModule().getCurrentSessionId && _liveSessionModule().getCurrentSessionId());
+    if (overrideSid) {
+      const overrideRow = document.createElement('div');
+      overrideRow.className = 'chat-context-popup-row';
+      overrideRow.style.marginTop = '10px';
+      overrideRow.style.alignItems = 'center';
+
+      const overrideLabel = document.createElement('span');
+      overrideLabel.textContent = 'Context window';
+      overrideRow.appendChild(overrideLabel);
+
+      const overrideInput = document.createElement('input');
+      overrideInput.type = 'number';
+      overrideInput.min = '1';
+      overrideInput.step = '1';
+      overrideInput.placeholder = 'Auto';
+      overrideInput.style.width = '84px';
+      overrideInput.style.font = 'inherit';
+      overrideInput.style.fontSize = '12px';
+      overrideInput.style.padding = '2px 6px';
+      overrideInput.style.border = '1px solid var(--border, #333)';
+      overrideInput.style.borderRadius = '4px';
+      overrideInput.style.background = 'transparent';
+      overrideInput.style.color = 'var(--fg)';
+      const _curOverride = _getNumCtxOverride(overrideSid);
+      if (_curOverride) overrideInput.value = String(_curOverride);
+      overrideInput.addEventListener('click', (e) => e.stopPropagation());
+      overrideInput.addEventListener('keydown', (e) => e.stopPropagation());
+      overrideRow.appendChild(overrideInput);
+      popup.appendChild(overrideRow);
+
+      const overrideBtnRow = document.createElement('div');
+      overrideBtnRow.style.display = 'flex';
+      overrideBtnRow.style.gap = '6px';
+      overrideBtnRow.style.marginTop = '6px';
+
+      const overrideSetBtn = document.createElement('button');
+      overrideSetBtn.type = 'button';
+      overrideSetBtn.className = 'chat-context-compact-btn';
+      overrideSetBtn.style.flex = '1';
+      overrideSetBtn.textContent = 'Set';
+      overrideSetBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const raw = (overrideInput.value || '').trim();
+        const parsed = parseInt(raw, 10);
+        if (!raw || !Number.isFinite(parsed) || parsed <= 0) {
+          uiModule.showToast('Enter a positive token count, or use Auto');
+          return;
+        }
+        _setNumCtxOverride(overrideSid, parsed);
+        _closeContextHeaderPopup();
+        refreshChatContextHeader('num_ctx_override');
+      });
+      overrideBtnRow.appendChild(overrideSetBtn);
+
+      const overrideAutoBtn = document.createElement('button');
+      overrideAutoBtn.type = 'button';
+      overrideAutoBtn.className = 'chat-context-compact-btn';
+      overrideAutoBtn.style.flex = '1';
+      overrideAutoBtn.textContent = 'Auto';
+      overrideAutoBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        overrideInput.value = '';
+        _setNumCtxOverride(overrideSid, null);
+        _closeContextHeaderPopup();
+        refreshChatContextHeader('num_ctx_override');
+      });
+      overrideBtnRow.appendChild(overrideAutoBtn);
+      popup.appendChild(overrideBtnRow);
+    }
 
     if (d.can_compact) {
       const compactBtn = document.createElement('button');
@@ -1928,6 +2055,16 @@ import { loadPanel } from './panels.js';
       }
       if (presetsModule.getSelectedPreset()) {
         fd.append('preset_id', presetsModule.getSelectedPreset());
+      }
+      // #15 — per-chat context window override, set from the context pill
+      // popup. Omitted entirely unless the user has touched the control for
+      // this session (see _getNumCtxOverrideForSend) — that's what lets an
+      // explicit "Auto" click send the literal "auto" and clear a
+      // previously-persisted backend override, while a chat that was never
+      // touched leaves the backend's stored value (if any) alone.
+      const _numCtxForSend = _getNumCtxOverrideForSend(streamSessionId);
+      if (_numCtxForSend != null) {
+        fd.append('num_ctx', _numCtxForSend);
       }
 
 

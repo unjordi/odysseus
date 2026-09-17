@@ -108,6 +108,9 @@ class Session:
     owner: Optional[str] = None
     is_important: bool = False
     message_count: int = 0
+    # #15 — per-chat override of num_ctx (context_length). None = use the
+    # discovered/default context length for the session's model.
+    num_ctx: Optional[int] = None
 
     def __post_init__(self):
         if self.headers is None:

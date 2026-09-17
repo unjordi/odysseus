@@ -221,6 +221,9 @@ class Session(TimestampMixin, Base):
     total_output_tokens = Column(Integer, default=0)
     mode = Column(String, nullable=True)  # 'agent', 'chat', or 'research'
     crew_member_id = Column(String, nullable=True)  # links to crew_members.id
+    # #15 — override de num_ctx (context_length) POR-CHAT: null = usar el descubierto
+    # del endpoint/modelo; un entero fuerza esa ventana solo para esta sesión.
+    num_ctx = Column(Integer, nullable=True)
 
     # Relationship to chat messages
     messages = relationship("ChatMessage", back_populates="session", cascade="all, delete-orphan")
@@ -950,6 +953,29 @@ def _migrate_add_owner_column():
             conn.execute("CREATE INDEX IF NOT EXISTS ix_sessions_owner ON sessions(owner)")
             conn.commit()
             logging.getLogger(__name__).info("Migrated: added 'owner' column to sessions")
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Migration check failed: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+def _migrate_add_num_ctx_column():
+    """#15 — Add per-chat num_ctx column to sessions if it doesn't exist."""
+    import sqlite3
+    db_path = DATABASE_URL.replace("sqlite:///", "")
+    if not os.path.exists(db_path):
+        return
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute("PRAGMA table_info(sessions)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "num_ctx" not in columns:
+            conn.execute("ALTER TABLE sessions ADD COLUMN num_ctx INTEGER")
+            conn.commit()
+            logging.getLogger(__name__).info("Migrated: added 'num_ctx' column to sessions")
     except Exception as e:
         logging.getLogger(__name__).warning(f"Migration check failed: {e}")
     finally:
@@ -2111,6 +2137,7 @@ def init_db():
     _migrate_add_supports_tools_column()
     _migrate_add_task_run_model_column()
     _migrate_add_owner_column()
+    _migrate_add_num_ctx_column()
     _migrate_add_document_archived_column()
     _migrate_add_last_message_at_column()
     _migrate_add_folder_column()
