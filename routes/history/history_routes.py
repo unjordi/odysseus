@@ -733,7 +733,12 @@ def setup_history_routes(session_manager, upload_handler=None) -> APIRouter:
             if len(session.history) < 6:
                 return {"status": "ok", "message": "Not enough messages to compact"}
 
-            ctx_len = get_context_length(session.endpoint_url, session.model)
+            # #15 — a per-chat num_ctx override wins over the discovered
+            # context length so compact's pct/threshold math matches the pill.
+            ctx_len = (
+                getattr(session, "num_ctx", None)
+                or get_context_length(session.endpoint_url, session.model)
+            )
             messages_before = session.get_context_messages()
             used_before = estimate_tokens(messages_before)
             pct_before = round((used_before / ctx_len) * 100, 1) if ctx_len else 0
