@@ -699,6 +699,69 @@ def _reconcile_selected_route_from_request(
     return True
 
 
+def _coerce_num_ctx_override(raw) -> Optional[int]:
+    """Parse a raw ``num_ctx`` request value into an override int, or None.
+
+    None means "no override — use the discovered context length". This is
+    the outcome for an empty string, "0", "auto" (case-insensitive), a
+    missing value, or anything that doesn't parse to a positive integer.
+    """
+    if raw is None:
+        return None
+    raw_str = str(raw).strip().lower()
+    if not raw_str or raw_str in ("0", "auto", "none", "null"):
+        return None
+    try:
+        value = int(float(raw_str))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _apply_num_ctx_override_from_request(
+    sess,
+    session_id: str,
+    field_present: bool,
+    raw_value,
+) -> Optional[int]:
+    """Read/persist the #15 per-chat ``num_ctx`` override for this turn.
+
+    ``field_present`` distinguishes "the request didn't mention num_ctx at
+    all" (leave whatever is already stored on the session untouched) from
+    "the request explicitly sent num_ctx, even if empty/0/auto" (which
+    clears a previously-set override back to None). Mirrors the
+    model/endpoint persistence pattern in
+    ``_reconcile_selected_route_from_request`` above: update the in-memory
+    Session and the DBSession row together.
+
+    Returns the effective num_ctx to use for THIS turn's LLM call: the
+    override just applied if the field was present, otherwise whatever is
+    already stored on the session (or None).
+    """
+    if not field_present:
+        return getattr(sess, "num_ctx", None)
+
+    parsed = _coerce_num_ctx_override(raw_value)
+    if getattr(sess, "num_ctx", None) == parsed:
+        return parsed
+
+    sess.num_ctx = parsed
+    try:
+        db = SessionLocal()
+        try:
+            db_session = db.query(DBSession).filter(DBSession.id == session_id).first()
+            if db_session:
+                db_session.num_ctx = parsed
+                db_session.updated_at = datetime.utcnow()
+                db.commit()
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning("Failed to persist num_ctx override for %s: %s", session_id, e)
+    logger.info("Applied num_ctx override for %s: %r", session_id, parsed)
+    return parsed
+
+
 def _set_user_time_from_request(request: Request) -> None:
     """Copy browser timezone headers into the per-request context.
 
@@ -960,6 +1023,17 @@ def setup_chat_routes(
         allow_bash = form_data.get("allow_bash") or (body or {}).get("allow_bash")
         allow_web_search = form_data.get("allow_web_search") or (body or {}).get("allow_web_search")
         use_rag = form_data.get("use_rag")
+        # #15 — per-chat context window override. "" / "0" / "auto" / missing
+        # all mean "no override, use the discovered context length" — but a
+        # field that is simply ABSENT from the request must NOT clear a
+        # previously-set override; only an explicitly-sent empty/"auto"/"0"
+        # value does that. See _apply_num_ctx_override_from_request below.
+        num_ctx_field_present = "num_ctx" in form_data or (
+            isinstance(body, dict) and "num_ctx" in body
+        )
+        num_ctx_raw = form_data.get("num_ctx")
+        if num_ctx_raw is None and isinstance(body, dict):
+            num_ctx_raw = body.get("num_ctx")
         search_context = form_data.get("search_context")  # pre-fetched web search results (compare mode)
         compare_mode = str(form_data.get("compare_mode", "")).lower() == "true"
         incognito = str(form_data.get("incognito", "")).lower() == "true"
@@ -1227,6 +1301,12 @@ def setup_chat_routes(
                 )
             if not (getattr(sess, "endpoint_url", "") or "").strip():
                 raise HTTPException(400, "Selected model endpoint is not configured")
+            # #15 — per-chat num_ctx override: persist it if this request sent
+            # one, then resolve the effective value (this turn's override, or
+            # whatever is already stored on the session) for the LLM call below.
+            _effective_num_ctx = _apply_num_ctx_override_from_request(
+                sess, session, num_ctx_field_present, num_ctx_raw,
+            )
             if (
                 chat_mode == "chat"
                 and isinstance(message, str)
@@ -1946,6 +2026,7 @@ def setup_chat_routes(
                         fallback_on_empty=_foreground_policy.fallback_on_empty,
                         candidate_request_factory=_chat_request_factory,
                         candidate_route_descriptors=_foreground_route_descriptors,
+                        num_ctx_override=_effective_num_ctx,
                     ):
                         if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
                             try:
@@ -2328,6 +2409,7 @@ def setup_chat_routes(
                         defer_context_shaping=_foreground_policy.enabled,
                         external_untrusted_context_seen=external_untrusted_context_seen,
                         exact_approval=exact_tool_approval,
+                        num_ctx_override=_effective_num_ctx,
                     ):
                         if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
                             try:
