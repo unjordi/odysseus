@@ -48,14 +48,21 @@ test('#29 injectSnapControls NO toca la ventana si el botón está oculto', () =
   assert.equal(consultoHeader, false);
 }));
 
-test('#29 setTileControlsHidden persiste el flag (aplicación viva la QAea Chrome)', () => conLocalStorage(() => {
+test('#29 setTileControlsHidden persiste el flag + usa el SELECTOR correcto al re-mostrar', () => conLocalStorage(() => {
   const prevDoc = globalThis.document;
-  globalThis.document = { querySelectorAll: () => [] }; // sin ventanas abiertas en el test
+  const selectores = [];
+  globalThis.document = { querySelectorAll: (sel) => { selectores.push(sel); return []; } };
   try {
     setTileControlsHidden(true);
     assert.equal(globalThis.localStorage.getItem('ody-hide-tile-controls'), '1');
+    assert.ok(selectores.includes('.modal-tile-btn')); // ocultar = quitar los botones
+    selectores.length = 0;
     setTileControlsHidden(false);
     assert.equal(globalThis.localStorage.getItem('ody-hide-tile-controls'), '0');
+    // Regresión (bug cazado en QA en vivo): re-mostrar re-inyecta por el MISMO criterio que modalManager
+    // (`.modal, .research-overlay` + _hasEdgeDock), NUNCA sobre TODO `.modal-header` (metía ⊞ en diálogos).
+    assert.ok(selectores.includes('.modal, .research-overlay'));
+    assert.ok(!selectores.includes('.modal-header'));
   } finally { globalThis.document = prevDoc; }
 }));
 

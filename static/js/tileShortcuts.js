@@ -317,8 +317,13 @@ export function setTileControlsHidden(hidden) {
   if (hidden) {
     document.querySelectorAll('.modal-tile-btn').forEach((b) => b.remove());
   } else {
-    // Re-inyecta en cada ventana abierta (injectSnapControls es idempotente).
-    document.querySelectorAll('.modal-header').forEach((h) => injectSnapControls(h.parentElement));
+    // Re-inyecta SOLO en ventanas-herramienta arrastrables (`_hasEdgeDock`), EXACTAMENTE el mismo criterio
+    // que usa modalManager.js:1646 al abrir — NO en diálogos de confirmación (Rename Session, Theme…) que no
+    // deben tener botón de mosaico. injectSnapControls es idempotente. (Bug cazado en QA en vivo: un re-inyecto
+    // ciego sobre TODO `.modal-header` metía el ⊞ en 5 diálogos que no lo llevan.)
+    document.querySelectorAll('.modal, .research-overlay').forEach((m) => {
+      if (m && m._hasEdgeDock && m.querySelector && m.querySelector('.modal-header')) injectSnapControls(m);
+    });
   }
 }
 
