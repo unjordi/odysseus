@@ -59,6 +59,7 @@ with preserve_import_state("core.database", "src.database", "core.session_manage
         _clear_user_pref_endpoint_refs,
         _default_endpoint_needs_assignment,
         _PROVIDER_CURATED,
+        _DEFAULT_SETTINGS,
     )
     from src.llm_core import ANTHROPIC_MODELS
 
@@ -82,11 +83,14 @@ def test_clear_speech_endpoint_settings_resets_tts_and_stt():
         "Text to Speech",
         "Speech to Text",
     ]
+    # El reset restaura los modelos por DEFECTO vigentes (no valores hardcoded:
+    # antes eran tts-1/base; hoy kokoro/large-v3-turbo). Asertar contra
+    # _DEFAULT_SETTINGS evita que el test vuelva a quedar stale si cambian.
     assert settings == {
         "tts_provider": "disabled",
-        "tts_model": "tts-1",
+        "tts_model": _DEFAULT_SETTINGS["tts_model"],
         "stt_provider": "disabled",
-        "stt_model": "base",
+        "stt_model": _DEFAULT_SETTINGS["stt_model"],
     }
 
 
@@ -131,7 +135,7 @@ def test_endpoint_cleanup_preserves_legacy_default_fallback_data():
     assert settings["utility_model_fallbacks"] == []
     assert settings["vision_model_fallbacks"] == []
     assert settings["stt_provider"] == "disabled"
-    assert settings["stt_model"] == "base"
+    assert settings["stt_model"] == _DEFAULT_SETTINGS["stt_model"]  # default vigente, no "base" hardcoded
 
 
 def test_endpoint_cleanup_updates_active_scoped_prefs_but_preserves_legacy_data():
