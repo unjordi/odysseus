@@ -151,6 +151,12 @@ DEFAULT_SETTINGS = {
     "google_pse_cx": "",
     "tavily_api_key": "",
     "serper_api_key": "",
+    # Biblioteca (Kavita) — #31. Vacío = usar el default/env (KAVITA_URL /
+    # KAVITA_API_KEY del contenedor). Si se llenan aquí, GANAN sobre el env, para
+    # que el usuario cambie servidor/llave desde la GUI sin pedir despliegue.
+    # kavita_api_key termina en "_api_key" → el scrub lo enmascara para no-admin.
+    "kavita_url": "",
+    "kavita_api_key": "",
     "research_endpoint_id": "",
     "research_model": "",
     "research_search_provider": "",

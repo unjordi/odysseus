@@ -84,6 +84,15 @@ export const SETTINGS_PANELS = Object.freeze([
       'env', 'frontier', 'offload',
     ],
   }),
+  definePanel({
+    id: 'biblioteca',
+    label: 'Biblioteca',
+    group: 'models',
+    keywords: [
+      'biblioteca', 'library', 'kavita', 'epub', 'books', 'libros',
+      'lectura', 'reader', 'voz', 'tts', 'read aloud', 'url', 'api key',
+    ],
+  }),
 
   definePanel({
     id: 'integrations',

@@ -49,13 +49,35 @@ def _clean_url(url: str) -> str:
     return (url or "").rstrip("/")
 
 
+def _setting(key: str) -> str:
+    """Read a Kavita setting from data/settings.json (empty on any failure).
+
+    Lazy import + never-throws so this module keeps working (falling back to
+    env) even if the settings layer is unavailable at import time.
+    """
+    try:
+        from src.settings import get_setting
+        val = get_setting(key, "")
+        return val if isinstance(val, str) else ""
+    except Exception:
+        return ""
+
+
 def get_kavita_url() -> str:
-    """Read KAVITA_URL from the environment (default http://kavita:5000)."""
+    """URL de Kavita. La GUI (Ajustes → Biblioteca) GANA sobre el env
+    (KAVITA_URL); si ambos están vacíos, cae al default http://kavita:5000."""
+    from_settings = _setting("kavita_url").strip()
+    if from_settings:
+        return _clean_url(from_settings)
     return _clean_url(os.environ.get("KAVITA_URL", DEFAULT_KAVITA_URL))
 
 
 def get_kavita_api_key() -> str:
-    """Read KAVITA_API_KEY from the environment (may be empty)."""
+    """apiKey de Kavita. La GUI (Ajustes → Biblioteca) GANA sobre el env
+    (KAVITA_API_KEY). Puede quedar vacía (→ 503 accionable en las rutas)."""
+    from_settings = _setting("kavita_api_key").strip()
+    if from_settings:
+        return from_settings
     return os.environ.get("KAVITA_API_KEY", "")
 
 
