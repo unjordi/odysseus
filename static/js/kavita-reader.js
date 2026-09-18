@@ -235,6 +235,21 @@ async function _openLibrary(libraryId, libraryName) {
   }
 }
 
+// Etiqueta legible de un volumen. Kavita usa un `name` SENTINELA (número puro,
+// p.ej. "-100000") para el volumen suelto de un libro de un solo tomo →
+// mostrarlo como título era una "cosa rara" (el lector decía "-100000"). Orden:
+// nombre real del volumen (no numérico) → título del capítulo → nombre de la
+// serie (que ES el título del libro) → fallback.
+function _volumeLabel(v, seriesName) {
+  const ch0 = (v.chapters && v.chapters[0]) || {};
+  const cands = [v.name, v.title, v.chapterName, ch0.title, ch0.titleName];
+  for (const c of cands) {
+    const s = (c == null ? '' : String(c)).trim();
+    if (s && !/^-?\d+(\.\d+)?$/.test(s)) return s;   // descarta sentinelas numéricos
+  }
+  return seriesName || 'Capítulo';
+}
+
 // ── navigation: chapters ───────────────────────────────────────────────────
 
 async function _openSeries(seriesId, seriesName) {
@@ -263,7 +278,7 @@ async function _openSeries(seriesId, seriesName) {
       const volumeId = v.id ?? v.volumeId ?? v.volume_id ?? null;
       const chapterId = (v.chapters && v.chapters[0] && v.chapters[0].id)
         ?? v.chapterId ?? v.chapter_id ?? v.id;
-      const name = v.name || v.title || v.chapterName || `Capítulo ${chapterId}`;
+      const name = _volumeLabel(v, seriesName);
       const row = document.createElement('div');
       row.className = 'kavita-row';
       row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:8px;cursor:pointer;border:1px solid rgba(128,128,128,0.15);background:rgba(128,128,128,0.04);';
