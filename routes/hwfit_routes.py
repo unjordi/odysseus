@@ -210,7 +210,7 @@ def setup_hwfit_routes():
 
     @router.get("/live")
     def get_live():
-        """Live host telemetry for the Host Stats panel: per-GPU utilization,
+        """Live host metrics for the Host Stats panel: per-GPU utilization,
         VRAM used, and temperature (nvidia-smi), CPU load %, RAM used, and the
         model(s) currently resident in Ollama. Always LOCAL/in-container — the
         panel polls the box serving Odysseus. Each section degrades on its own;

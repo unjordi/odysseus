@@ -1,4 +1,4 @@
-"""Live hardware telemetry seam for the Host Stats panel.
+"""Live hardware metrics seam for the Host Stats panel.
 
 ``services/hwfit/hardware.py`` detects *capacity* — total VRAM, GPU name, RAM
 total, CPU cores — and caches it for 24h, because that is all the Cookbook
