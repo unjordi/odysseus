@@ -818,6 +818,9 @@ app.include_router(setup_compare_routes(session_manager))
 from routes.prefs_routes import setup_prefs_routes
 app.include_router(setup_prefs_routes())
 
+from routes.kavita_routes import setup_kavita_routes
+app.include_router(setup_kavita_routes())
+
 # Backup (export/import user data)
 from routes.backup_routes import setup_backup_routes
 app.include_router(setup_backup_routes(memory_manager, preset_manager, skills_manager))
