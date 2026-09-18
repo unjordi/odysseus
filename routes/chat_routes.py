@@ -712,8 +712,11 @@ def _coerce_num_ctx_override(raw) -> Optional[int]:
     if not raw_str or raw_str in ("0", "auto", "none", "null"):
         return None
     try:
+        # OverflowError covers "inf"/"-inf"/"1e999" (float() accepts them but
+        # int() can't convert infinity) — without it a crafted num_ctx crashes
+        # the request with an uncaught 500.
         value = int(float(raw_str))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return value if value > 0 else None
 
@@ -745,7 +748,14 @@ def _apply_num_ctx_override_from_request(
     if getattr(sess, "num_ctx", None) == parsed:
         return parsed
 
-    sess.num_ctx = parsed
+    # Persist to the DB FIRST, then mirror to the in-memory Session only when
+    # the commit actually succeeded. If we set memory before committing and the
+    # commit then fails (or the row is missing), memory races ahead of the DB;
+    # combined with the early-return above that drift would be permanent for the
+    # life of the process and the override would silently vanish on restart
+    # (memory reloads from the stale DB value). Keeping memory in lock-step with
+    # what is durable makes the early-return's memory==DB assumption hold.
+    persisted = False
     try:
         db = SessionLocal()
         try:
@@ -754,11 +764,24 @@ def _apply_num_ctx_override_from_request(
                 db_session.num_ctx = parsed
                 db_session.updated_at = datetime.utcnow()
                 db.commit()
+                persisted = True
+            else:
+                logger.warning(
+                    "num_ctx override not persisted for %s: no DBSession row",
+                    session_id,
+                )
         finally:
             db.close()
     except Exception as e:
         logger.warning("Failed to persist num_ctx override for %s: %s", session_id, e)
-    logger.info("Applied num_ctx override for %s: %r", session_id, parsed)
+
+    if persisted:
+        sess.num_ctx = parsed
+        logger.info("Applied num_ctx override for %s: %r", session_id, parsed)
+        return parsed
+
+    # Persistence failed: don't advance memory (keep it consistent with the DB),
+    # but still honor the override for THIS turn's LLM call.
     return parsed
 
 
