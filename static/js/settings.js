@@ -1049,6 +1049,67 @@ var _searchKeyFields = {
   tavily: 'tavily_api_key', serper: 'serper_api_key',
 };
 
+async function initBibliotecaSettings() {
+  var urlInput = el('set-kavitaUrl');
+  var keyInput = el('set-kavitaApiKey');
+  var testBtn = el('set-kavitaTestBtn');
+  var msg = el('set-kavitaMsg');
+  if (!urlInput || !keyInput) return;
+
+  try {
+    var res = await fetch('/api/auth/settings', { credentials: 'same-origin' });
+    var s = await res.json();
+    if (s.kavita_url) urlInput.value = s.kavita_url;
+    if (s.kavita_api_key) keyInput.value = s.kavita_api_key;
+  } catch (e) { console.warn('Failed to load Kavita settings', e); }
+
+  function setMsg(text, ok) {
+    if (!msg) return;
+    msg.textContent = text || '';
+    msg.style.color = ok === false ? 'var(--red)'
+      : ok === true ? 'var(--fg)'
+      : 'color-mix(in srgb, var(--fg) 45%, transparent)';
+  }
+
+  async function saveKavita() {
+    try {
+      // Campos vacíos = limpiar el override → volver a la config del contenedor.
+      await _postSettings({ kavita_url: urlInput.value.trim(), kavita_api_key: keyInput.value.trim() });
+      setMsg('Guardado.', true);
+    } catch (e) {
+      setMsg('No se pudo guardar: ' + (e && e.message ? e.message : e), false);
+    }
+  }
+
+  urlInput.addEventListener('change', saveKavita);
+  keyInput.addEventListener('change', saveKavita);
+
+  if (testBtn) {
+    testBtn.addEventListener('click', async function() {
+      testBtn.disabled = true;
+      setMsg('Guardando y probando…');
+      await saveKavita();
+      try {
+        // La ruta usa la config recién guardada (settings gana sobre env).
+        var r = await fetch('/api/kavita/libraries', { credentials: 'same-origin' });
+        if (!r.ok) {
+          var detail = String(r.status);
+          try { var b = await r.json(); detail = (b.detail && b.detail.message) || detail; } catch (_) {}
+          setMsg('Sin conexión: ' + detail, false);
+        } else {
+          var data = await r.json();
+          var n = ((data && data.libraries) || []).length;
+          setMsg('Conectado ✓ ' + n + ' biblioteca(s).', true);
+        }
+      } catch (e) {
+        setMsg('Sin conexión: ' + (e && e.message ? e.message : e), false);
+      } finally {
+        testBtn.disabled = false;
+      }
+    });
+  }
+}
+
 async function initSearchSettings() {
   var provSel = el('set-searchProvider');
   var countSel = el('set-searchResultCount');
@@ -2236,6 +2297,7 @@ function initAll() {
   initTtsSettings();
   initSttSettings();
   initSearchSettings();
+  initBibliotecaSettings();
   initResearchSettings();
   initResearchSearchSettings();
   initAgentSettings();

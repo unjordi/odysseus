@@ -1635,6 +1635,10 @@
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="15" cy="12" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="currentColor" stroke="none"/></svg>
             <span>Axon</span>
           </button>
+          <button class="settings-nav-item" data-settings-tab="biblioteca">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+            <span>Biblioteca</span>
+          </button>
           <div class="settings-sidebar-divider"></div>
           <!-- Section 2: Comms (Integrations → Email → Reminders).
                Integrations leads here because it's where the underlying
@@ -1983,6 +1987,35 @@
              nueva del harness aparece aquí sin tocar este HTML. La carga es
              perezosa (settings.js → onSettingsPanelActivated('axon')). -->
         <div data-settings-panel="axon" class="axoncfg-panel hidden"></div>
+
+        <!-- ═══ BIBLIOTECA (KAVITA) TAB ═══ -->
+
+        <div data-settings-panel="biblioteca" class="hidden">
+          <div class="admin-card">
+            <h2><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:5px;opacity:0.6"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>Biblioteca (Kavita)</h2>
+            <div class="admin-toggle-sub" style="margin-bottom:8px">Servidor Kavita del que el visor "📚 Biblioteca" lee tus libros y del que el lector en voz alta toma el texto. Deja los campos vacíos para usar la configuración del contenedor (variables de entorno).</div>
+            <div class="settings-col">
+              <div class="settings-row">
+                <label class="settings-label">URL</label>
+                <input id="set-kavitaUrl" type="text" placeholder="http://kavita:5000" class="settings-select">
+              </div>
+              <div class="settings-row">
+                <label class="settings-label">API Key</label>
+                <div style="position:relative;flex:1;display:flex;align-items:center;">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="position:absolute;left:9px;top:50%;transform:translateY(-50%);opacity:0.55;pointer-events:none;"><path d="M21 2l-9.6 9.6"/><circle cx="7.5" cy="15.5" r="5.5"/><path d="M15.5 7.5l3 3"/></svg>
+                  <input id="set-kavitaApiKey" type="password" placeholder="Kavita API key" class="settings-select" style="flex:1;padding-left:28px;" autocomplete="off">
+                </div>
+              </div>
+              <div class="settings-row" style="justify-content:flex-end;">
+                <button type="button" class="admin-btn-sm" id="set-kavitaTestBtn" style="display:inline-flex;align-items:center;gap:4px;">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>Probar conexión
+                </button>
+              </div>
+              <div id="set-kavitaHint" class="admin-toggle-sub">Genera tu API key en Kavita → Ajustes de la cuenta → 3er-party clients / API Key.</div>
+              <div id="set-kavitaMsg" style="font-size:11px;"></div>
+            </div>
+          </div>
+        </div>
 
         <!-- ═══ APPEARANCE TAB ═══ -->
         <div data-settings-panel="appearance" class="settings-appearance-panel hidden">
@@ -2813,7 +2846,7 @@
 <script type="module" src="/static/js/search-chat.js"></script>
 <script type="module" src="/static/js/theme.js"></script>
 <script type="module" src="/static/js/censor.js"></script>
-<script type="module" src="/static/js/settings.js?v=20260815approvalsave1"></script>
+<script type="module" src="/static/js/settings.js?v=20260918slice4kavita"></script>
 <script type="module" src="/static/js/assistant.js"></script>
 <script type="module" src="/static/js/kavita-reader.js?v=20260918slice3tts"></script>
 <script type="module" src="/static/app.js?v=20260815toolapproval4"></script>  <!-- app.js must be LAST -->
