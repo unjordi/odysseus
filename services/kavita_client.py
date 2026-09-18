@@ -255,6 +255,35 @@ class KavitaClient:
         """POST a JSON endpoint (defensive)."""
         return self._request_json("POST", path, **kwargs)
 
+    def post_ok(self, path: str, **kwargs) -> bool:
+        """POST expecting a 2xx with NO meaningful body (e.g. progress write).
+
+        Returns True on success; raises KavitaError (named cause) on failure.
+        Deliberately does NOT parse JSON — Kavita's /api/Reader/progress returns
+        200 with an empty body, so post() would raise a bogus bad_json.
+        """
+        url = f"{self.url}{path}"
+        headers = kwargs.pop("headers", {})
+        headers = {**self._headers(), **headers}
+        try:
+            resp = self._client.request("POST", url, headers=headers, **kwargs)
+        except Exception as e:
+            raise KavitaError(
+                f"Kavita inalcanzable en {self.url}: {e}", cause="unreachable"
+            ) from e
+        if resp.status_code in (401, 403):
+            self._token = None
+            raise KavitaError(
+                f"Kavita rechazó la autenticación ({resp.status_code}) en {path}",
+                cause=f"http_{resp.status_code}",
+            )
+        if resp.status_code >= 400:
+            raise KavitaError(
+                f"Kavita respondió error {resp.status_code} en {path}",
+                cause=f"http_{resp.status_code}",
+            )
+        return True
+
     def get_bytes(self, path: str, **kwargs) -> bytes:
         """GET a binary endpoint (defensive)."""
         return self._request_bytes(path, **kwargs)

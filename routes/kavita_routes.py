@@ -22,12 +22,26 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
+from pydantic import BaseModel
 
 from src.auth_helpers import get_current_user
 from services.kavita_client import KavitaError
 from services.kavita_library import KavitaLibrary
 
 logger = logging.getLogger(__name__)
+
+
+class ProgressWrite(BaseModel):
+    """Body for POST /api/kavita/progress (#31 Slice 2c write-back).
+
+    seriesId/volumeId/libraryId default to 0 so the reader can send whatever
+    context it has; Kavita's ProgressDto tolerates 0 for the ids it can infer.
+    """
+    chapterId: int
+    page: int
+    seriesId: int = 0
+    volumeId: int = 0
+    libraryId: int = 0
 
 
 def _kavita_http_error(err: KavitaError) -> HTTPException:
@@ -130,6 +144,28 @@ def setup_kavita_routes():
         except KavitaError as e:
             raise _kavita_http_error(e)
         return progress
+
+    @router.post("/progress")
+    async def save_progress(request: Request, payload: ProgressWrite):
+        """Write the user's reading position back to Kavita (#31 Slice 2c).
+
+        DELEGATED: Kavita stays the source of truth; the reader/TTS calls this so
+        resuming is consistent here and in Kavita's own UI. Best-effort on the
+        front (a failure never breaks reading); errors still surface cleanly.
+        """
+        get_current_user(request)
+        try:
+            with KavitaLibrary() as lib:
+                result = lib.save_book_progress(
+                    chapter_id=payload.chapterId,
+                    page=payload.page,
+                    series_id=payload.seriesId,
+                    volume_id=payload.volumeId,
+                    library_id=payload.libraryId,
+                )
+        except KavitaError as e:
+            raise _kavita_http_error(e)
+        return result
 
     @router.get("/book/{chapterId}")
     async def get_book(request: Request, chapterId: int):
