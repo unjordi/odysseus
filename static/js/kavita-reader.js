@@ -1,20 +1,23 @@
-// Kavita Library / Reader — #31 Slice 2b
+// Kavita Library / Reader — #31 Slices 2b + 3 + 2c
 //
-// Front-end visor de EPUB que delega el rendering a Kavita (paridad visual).
-// El backend (routes/kavita_routes.py) ya expone:
-//   GET /api/kavita/libraries
-//   GET /api/kavita/series?libraryId=
-//   GET /api/kavita/series/{seriesId}/volumes
-//   GET /api/kavita/progress?chapterId=
-//   GET /api/kavita/book/{chapterId}/info
-//   GET /api/kavita/book/{chapterId}/toc
-//   GET /api/kavita/book/{chapterId}/page?page=N
-//   GET /api/kavita/book/{chapterId}/resource?file=<path>
+// Front-end visor de EPUB que delega el rendering a Kavita (paridad visual),
+// lo lee en voz alta (Slice 3) y escribe el progreso de vuelta (Slice 2c).
+// El backend (routes/kavita_routes.py) expone:
+//   GET  /api/kavita/libraries
+//   GET  /api/kavita/series?libraryId=
+//   GET  /api/kavita/series/{seriesId}/volumes
+//   GET  /api/kavita/progress?chapterId=      (lee progreso DELEGADO)
+//   POST /api/kavita/progress                 (escribe progreso DELEGADO — Slice 2c)
+//   GET  /api/kavita/book/{chapterId}/info
+//   GET  /api/kavita/book/{chapterId}/toc
+//   GET  /api/kavita/book/{chapterId}/page?page=N
+//   GET  /api/kavita/book/{chapterId}/resource?file=<path>
 //
 // Patrón del shell: modal #kavita-modal (mismo estilo que #memory-modal),
 // botón en la sidebar (#tool-kavita-btn), fetch con credentials same-origin.
 //
-// ESCRIBIR progreso es el Slice 2c — NO se hace aquí.
+// Progreso: Kavita es la FUENTE DE VERDAD. El visor lo LEE al abrir (para
+// reanudar) y lo ESCRIBE al cambiar de página / avanzar por TTS (best-effort).
 
 const API = '/api/kavita';
 
@@ -69,6 +72,7 @@ const state = {
   libraryId: null,
   seriesId: null,
   chapterId: null,
+  volumeId: null,          // para escribir progreso de vuelta a Kavita (Slice 2c)
   page: 0,
   totalPages: null,
   toc: [],
@@ -230,13 +234,19 @@ async function _openSeries(seriesId, seriesName) {
       return;
     }
     vols.forEach((v) => {
-      const id = v.id ?? v.chapterId ?? v.chapter_id ?? v.volumeId ?? v.volume_id;
-      const name = v.name || v.title || v.chapterName || `Capítulo ${id}`;
+      // Kavita devuelve VOLÚMENES que contienen capítulos. El capítulo real
+      // (chapters[0].id) es lo que leemos y con lo que escribimos progreso; el
+      // volumeId (v.id) también viaja en el ProgressDto. Fallbacks para formas
+      // en que la fila ya sea un capítulo suelto.
+      const volumeId = v.id ?? v.volumeId ?? v.volume_id ?? null;
+      const chapterId = (v.chapters && v.chapters[0] && v.chapters[0].id)
+        ?? v.chapterId ?? v.chapter_id ?? v.id;
+      const name = v.name || v.title || v.chapterName || `Capítulo ${chapterId}`;
       const row = document.createElement('div');
       row.className = 'kavita-row';
       row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:8px;cursor:pointer;border:1px solid rgba(128,128,128,0.15);background:rgba(128,128,128,0.04);';
       row.innerHTML = `<span style="font-size:1em;">📄</span><span class="grow" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_escapeHtml(name)}</span>`;
-      row.addEventListener('click', () => _openChapter(id, name));
+      row.addEventListener('click', () => _openChapter(chapterId, name, volumeId));
       listEl.appendChild(row);
     });
   } catch (e) {
@@ -248,9 +258,10 @@ async function _openSeries(seriesId, seriesName) {
 
 // ── reader ─────────────────────────────────────────────────────────────────
 
-async function _openChapter(chapterId, chapterName) {
+async function _openChapter(chapterId, chapterName, volumeId) {
   state.view = 'reader';
   state.chapterId = chapterId;
+  state.volumeId = volumeId ?? null;
   state.page = 0;
   state.toc = [];
   _showReader();
@@ -274,6 +285,27 @@ async function _openChapter(chapterId, chapterName) {
   _loadToc();
 }
 
+// Escribe el progreso de lectura de vuelta a Kavita (DELEGADO — Kavita es la
+// fuente de verdad). Best-effort: un fallo JAMÁS interrumpe la lectura ni el TTS
+// (fire-and-forget, se traga el error). Slice 2c.
+function _saveProgress(pageNum) {
+  if (state.chapterId == null) return;
+  try {
+    fetch(`${API}/progress`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chapterId: state.chapterId,
+        page: pageNum,
+        seriesId: state.seriesId || 0,
+        volumeId: state.volumeId || 0,
+        libraryId: state.libraryId || 0,
+      }),
+    }).catch(() => { /* best-effort: no rompe la lectura */ });
+  } catch (_) { /* ignore */ }
+}
+
 // Devuelve true si cargó una página real; false si fue fin-de-libro o error
 // (lo usa el lector en voz alta para saber si auto-avanzar o detenerse).
 async function _loadPage(pageNum) {
@@ -287,6 +319,7 @@ async function _loadPage(pageNum) {
     pageIndicator.textContent = `pág. ${pageNum}`;
     prevBtn.disabled = pageNum <= 0;
     nextBtn.disabled = false;
+    _saveProgress(pageNum);   // write-back DELEGADO a Kavita (best-effort, Slice 2c)
     return true;
   } catch (e) {
     // If it's a 404/400 on a high page, treat as end-of-book.

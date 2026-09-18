@@ -171,6 +171,36 @@ class KavitaLibrary:
             "raw": d,
         }
 
+    # ── DELEGATED reading progress (WRITE-BACK, #31 Slice 2c) ──────────────
+
+    def save_book_progress(
+        self,
+        chapter_id: int,
+        page: int,
+        series_id: int = 0,
+        volume_id: int = 0,
+        library_id: int = 0,
+    ) -> dict:
+        """POST /api/Reader/progress → push the user's reading position back.
+
+        Kavita stays the source of truth for progress (we keep none of our own);
+        this write-back keeps resuming consistent whether the user reads here or
+        in Kavita's own UI. ProgressDto (verified against the live API):
+        ``{volumeId, chapterId, pageNum, seriesId, libraryId, bookScrollId}``.
+        Uses post_ok (the endpoint replies 200 with an empty body). Defensive:
+        raises KavitaError (named cause) on transport/auth/HTTP failure.
+        """
+        dto = {
+            "volumeId": int(volume_id or 0),
+            "chapterId": int(chapter_id),
+            "pageNum": int(page or 0),
+            "seriesId": int(series_id or 0),
+            "libraryId": int(library_id or 0),
+            "bookScrollId": None,
+        }
+        self.client.post_ok("/api/Reader/progress", json=dto)
+        return {"ok": True, "chapterId": dto["chapterId"], "pageNum": dto["pageNum"]}
+
     # ── EPUB stream / download ─────────────────────────────────────────────
 
     def download_chapter(self, chapter_id: int) -> bytes:
