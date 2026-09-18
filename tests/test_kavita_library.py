@@ -250,6 +250,94 @@ class TestDownload:
         assert lib.get_book_info(555) == {}
 
 
+# ─── DELEGATED RENDERING (book-info / toc / page / resource) ─────────────────
+
+class TestBookToc:
+    def test_get_book_toc_ok(self):
+        client = MagicMock()
+        client.get.return_value = [
+            {"title": "Cap 1", "part": 1, "page": 1, "children": []},
+            {"title": "Cap 2", "part": 2, "page": 50, "children": []},
+        ]
+        lib = KavitaLibrary(client=client)
+        result = lib.get_book_toc(777)
+        assert len(result) == 2
+        assert result[0]["title"] == "Cap 1"
+        client.get.assert_called_once_with("/api/Book/777/chapters")
+
+    def test_get_book_toc_dict_wrapper(self):
+        """Kavita may wrap the TOC in a dict → still returns a list."""
+        client = MagicMock()
+        client.get.return_value = {"chapters": [{"title": "X"}]}
+        lib = KavitaLibrary(client=client)
+        assert lib.get_book_toc(1) == [{"title": "X"}]
+
+    def test_get_book_toc_non_list(self):
+        client = MagicMock()
+        client.get.return_value = "unexpected"
+        lib = KavitaLibrary(client=client)
+        assert lib.get_book_toc(1) == []
+
+    def test_get_book_toc_error_degrades(self):
+        client = MagicMock()
+        client.get.side_effect = KavitaError(
+            "Kavita respondió error 500 en /api/Book/1/chapters", cause="http_500"
+        )
+        lib = KavitaLibrary(client=client)
+        with pytest.raises(KavitaError) as exc:
+            lib.get_book_toc(1)
+        assert exc.value.cause == "http_500"
+
+
+class TestBookPage:
+    def test_get_book_page_ok(self):
+        client = MagicMock()
+        client.get_text.return_value = "<html><body><p>hola</p></body></html>"
+        lib = KavitaLibrary(client=client)
+        result = lib.get_book_page(42, 3)
+        assert result == "<html><body><p>hola</p></body></html>"
+        client.get_text.assert_called_once_with(
+            "/api/Book/42/book-page", params={"page": 3}
+        )
+
+    def test_get_book_page_error_degrades(self):
+        client = MagicMock()
+        client.get_text.side_effect = KavitaError(
+            "Kavita inalcanzable en http://kavita:5000", cause="unreachable"
+        )
+        lib = KavitaLibrary(client=client)
+        with pytest.raises(KavitaError) as exc:
+            lib.get_book_page(42, 1)
+        assert exc.value.cause == "unreachable"
+
+
+class TestBookResource:
+    def test_get_book_resource_ok(self):
+        client = MagicMock()
+        client.get_bytes_with_headers.return_value = (
+            b"body { color: red; }",
+            {"content-type": "text/css"},
+        )
+        lib = KavitaLibrary(client=client)
+        data, headers = lib.get_book_resource(9, "styles/main.css")
+        assert data == b"body { color: red; }"
+        assert headers["content-type"] == "text/css"
+        client.get_bytes_with_headers.assert_called_once_with(
+            "/api/Book/9/book-resources", params={"file": "styles/main.css"}
+        )
+
+    def test_get_book_resource_error_degrades(self):
+        client = MagicMock()
+        client.get_bytes_with_headers.side_effect = KavitaError(
+            "Kavita respondió error 404 en /api/Book/9/book-resources",
+            cause="http_404",
+        )
+        lib = KavitaLibrary(client=client)
+        with pytest.raises(KavitaError) as exc:
+            lib.get_book_resource(9, "missing.css")
+        assert exc.value.cause == "http_404"
+
+
 # ─── DEFENSIVENESS: client errors propagate with named cause ─────────────────
 
 class TestDefensive:

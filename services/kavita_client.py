@@ -236,3 +236,62 @@ class KavitaClient:
     def get_bytes(self, path: str, **kwargs) -> bytes:
         """GET a binary endpoint (defensive)."""
         return self._request_bytes(path, **kwargs)
+
+    def get_text(self, path: str, **kwargs) -> str:
+        """GET a text endpoint (defensive). Returns the body as a str.
+
+        Used for Kavita's rendered HTML pages (book-page). Raises KavitaError
+        (named cause) on transport/auth/HTTP failure.
+        """
+        url = f"{self.url}{path}"
+        headers = kwargs.pop("headers", {})
+        headers = {**self._headers(), **headers}
+        try:
+            resp = self._client.request(method="GET", url=url, headers=headers, **kwargs)
+        except Exception as e:
+            raise KavitaError(
+                f"Kavita inalcanzable en {self.url}: {e}", cause="unreachable"
+            ) from e
+
+        if resp.status_code in (401, 403):
+            self._token = None
+            raise KavitaError(
+                f"Kavita rechazó la autenticación ({resp.status_code}) en {path}",
+                cause=f"http_{resp.status_code}",
+            )
+        if resp.status_code >= 400:
+            raise KavitaError(
+                f"Kavita respondió error {resp.status_code} en {path}",
+                cause=f"http_{resp.status_code}",
+            )
+        return resp.text
+
+    def get_bytes_with_headers(self, path: str, **kwargs) -> tuple[bytes, dict]:
+        """GET a binary endpoint and return (bytes, headers) so the caller can
+        forward the upstream Content-Type (e.g. book-resources CSS/images).
+
+        Defensive: raises KavitaError (named cause) on transport/auth/HTTP
+        failure.
+        """
+        url = f"{self.url}{path}"
+        headers = kwargs.pop("headers", {})
+        headers = {**self._headers(), **headers}
+        try:
+            resp = self._client.request(method="GET", url=url, headers=headers, **kwargs)
+        except Exception as e:
+            raise KavitaError(
+                f"Kavita inalcanzable en {self.url}: {e}", cause="unreachable"
+            ) from e
+
+        if resp.status_code in (401, 403):
+            self._token = None
+            raise KavitaError(
+                f"Kavita rechazó la autenticación ({resp.status_code}) en {path}",
+                cause=f"http_{resp.status_code}",
+            )
+        if resp.status_code >= 400:
+            raise KavitaError(
+                f"Kavita respondió error {resp.status_code} en {path}",
+                cause=f"http_{resp.status_code}",
+            )
+        return resp.content, dict(resp.headers)

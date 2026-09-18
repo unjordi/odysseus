@@ -149,4 +149,74 @@ def setup_kavita_routes():
             },
         )
 
+    # ── DELEGATED RENDERING (Kavita renders the EPUB; we recycle its HTML) ──
+
+    @router.get("/book/{chapterId}/info")
+    async def get_book_info(request: Request, chapterId: int):
+        """EPUB metadata as rendered by Kavita (bookTitle, seriesId, ...)."""
+        get_current_user(request)
+        chapter_id = _to_int(chapterId, "chapterId")
+        try:
+            with KavitaLibrary() as lib:
+                info = lib.get_book_info(chapter_id)
+        except KavitaError as e:
+            raise _kavita_http_error(e)
+        return {"info": info}
+
+    @router.get("/book/{chapterId}/toc")
+    async def get_book_toc(request: Request, chapterId: int):
+        """Table of contents for a chapter (Kavita's /chapters endpoint)."""
+        get_current_user(request)
+        chapter_id = _to_int(chapterId, "chapterId")
+        try:
+            with KavitaLibrary() as lib:
+                toc = lib.get_book_toc(chapter_id)
+        except KavitaError as e:
+            raise _kavita_http_error(e)
+        return {"toc": toc}
+
+    @router.get("/book/{chapterId}/page")
+    async def get_book_page(
+        request: Request,
+        chapterId: int,
+        page: int = Query(..., description="Page number (1-based)"),
+    ):
+        """Rendered HTML for a single page (Kavita's book-page endpoint).
+
+        This is the DELEGATED rendering: Kavita converts the EPUB page to HTML
+        and we forward it verbatim (text/html). The front-end (Slice 2b) just
+        displays it — no epub.js needed.
+        """
+        get_current_user(request)
+        chapter_id = _to_int(chapterId, "chapterId")
+        page_num = _to_int(page, "page")
+        try:
+            with KavitaLibrary() as lib:
+                html = lib.get_book_page(chapter_id, page_num)
+        except KavitaError as e:
+            raise _kavita_http_error(e)
+        return Response(content=html, media_type="text/html; charset=utf-8")
+
+    @router.get("/book/{chapterId}/resource")
+    async def get_book_resource(
+        request: Request,
+        chapterId: int,
+        file: str = Query(..., description="Resource path (CSS/image) referenced by the HTML"),
+    ):
+        """A resource (CSS/image) referenced by the rendered HTML.
+
+        Forwards the upstream Content-Type so the browser can load it correctly.
+        """
+        get_current_user(request)
+        chapter_id = _to_int(chapterId, "chapterId")
+        try:
+            with KavitaLibrary() as lib:
+                data, headers = lib.get_book_resource(chapter_id, file)
+        except KavitaError as e:
+            raise _kavita_http_error(e)
+        # Forward the upstream Content-Type (defensive: default to octet-stream).
+        upstream_ct = headers.get("content-type") or headers.get("Content-Type")
+        media_type = upstream_ct if upstream_ct else "application/octet-stream"
+        return Response(content=data, media_type=media_type)
+
     return router

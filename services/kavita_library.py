@@ -190,3 +190,37 @@ class KavitaLibrary:
         """
         data = self.client.get(f"/api/Book/{chapter_id}/book-info")
         return data if isinstance(data, dict) else {}
+
+    def get_book_toc(self, chapter_id: int) -> list:
+        """GET /api/Book/{chapterId}/chapters → table of contents (list).
+
+        Each entry is a dict like {title, part, page, children:[...]}. Defensive:
+        returns [] on non-list shape; raises KavitaError (named cause) on
+        transport/auth/HTTP/JSON failure.
+        """
+        data = self.client.get(f"/api/Book/{chapter_id}/chapters")
+        return _as_list(data)
+
+    def get_book_page(self, chapter_id: int, page: int) -> str:
+        """GET /api/Book/{chapterId}/book-page?page={n} → rendered HTML.
+
+        This is the CONTENT rendered by Kavita (the delegated rendering we
+        recycle instead of epub.js). Defensive: raises KavitaError (named
+        cause) on transport/auth/HTTP failure; returns the HTML string
+        otherwise.
+        """
+        return self.client.get_text(
+            f"/api/Book/{chapter_id}/book-page", params={"page": page}
+        )
+
+    def get_book_resource(self, chapter_id: int, file: str) -> tuple[bytes, dict]:
+        """GET /api/Book/{chapterId}/book-resources?file={path} → (bytes, headers).
+
+        Returns the raw resource bytes (CSS/images referenced by the rendered
+        HTML) plus the upstream response headers so the route can forward the
+        correct Content-Type. Defensive: raises KavitaError (named cause) on
+        transport/auth/HTTP failure.
+        """
+        return self.client.get_bytes_with_headers(
+            f"/api/Book/{chapter_id}/book-resources", params={"file": file}
+        )
