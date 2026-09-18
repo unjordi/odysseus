@@ -111,9 +111,9 @@ class KavitaClient:
         params = {"apiKey": self.api_key, "pluginName": PLUGIN_NAME}
         try:
             resp = self._client.post(endpoint, params=params)
-        except httpx.HTTPError as e:
+        except Exception as e:
             raise KavitaError(
-                f"Kavita inalcanzable en {self.url}", cause=f"unreachable: {e}"
+                f"Kavita inalcanzable en {self.url}: {e}", cause="unreachable"
             ) from e
 
         if resp.status_code in (401, 403):
@@ -128,7 +128,7 @@ class KavitaClient:
             data = resp.json()
         except Exception as e:
             raise KavitaError(
-                "Respuesta de authenticate no es JSON válido", cause=f"bad_json: {e}"
+                "Respuesta de authenticate no es JSON válido", cause="bad_json"
             ) from e
 
         token = data.get("token") if isinstance(data, dict) else None
@@ -163,9 +163,9 @@ class KavitaClient:
         headers = {**self._headers(), **headers}
         try:
             resp = self._client.request(method, url, headers=headers, **kwargs)
-        except httpx.HTTPError as e:
+        except Exception as e:
             raise KavitaError(
-                f"Kavita inalcanzable en {self.url}", cause=f"unreachable: {e}"
+                f"Kavita inalcanzable en {self.url}: {e}", cause="unreachable"
             ) from e
 
         if resp.status_code in (401, 403):
@@ -185,7 +185,7 @@ class KavitaClient:
             return resp.json()
         except Exception as e:
             raise KavitaError(
-                f"Respuesta de {path} no es JSON válido", cause=f"bad_json: {e}"
+                f"Respuesta de {path} no es JSON válido: {e}", cause="bad_json"
             ) from e
 
     def _request_bytes(self, path: str, **kwargs) -> bytes:
@@ -195,9 +195,9 @@ class KavitaClient:
         headers = {**self._headers(), **headers}
         try:
             resp = self._client.request(method="GET", url=url, headers=headers, **kwargs)
-        except httpx.HTTPError as e:
+        except Exception as e:
             raise KavitaError(
-                f"Kavita inalcanzable en {self.url}", cause=f"unreachable: {e}"
+                f"Kavita inalcanzable en {self.url}: {e}", cause="unreachable"
             ) from e
 
         if resp.status_code in (401, 403):
@@ -220,7 +220,7 @@ class KavitaClient:
         try:
             resp = self._client.get(f"{self.url}/api/health")
             return resp.status_code == 200
-        except httpx.HTTPError:
+        except Exception:
             return False
 
     # ── convenience: raw accessors used by kavita_library ─────────────────
