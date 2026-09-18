@@ -82,7 +82,7 @@ const state = {
 // ── DOM refs ───────────────────────────────────────────────────────────────
 
 let modal, closeBtn, backBtn, titleEl, breadcrumbEl;
-let browserPane, errorEl, loadingEl, listEl;
+let browserPane, errorEl, loadingEl, listEl, filterEl;
 let readerPane, prevBtn, nextBtn, pageIndicator, tocToggle, tocEl, pageEl;
 
 function _initDom() {
@@ -95,6 +95,7 @@ function _initDom() {
   errorEl = _el('kavita-error');
   loadingEl = _el('kavita-loading');
   listEl = _el('kavita-list');
+  filterEl = _el('kavita-filter');
   readerPane = _el('kavita-reader');
   prevBtn = _el('kavita-prev');
   nextBtn = _el('kavita-next');
@@ -133,16 +134,34 @@ function _setTitle(t) {
   if (titleEl) titleEl.textContent = t;
 }
 
+// El panel del lector tiene `display:flex` INLINE, y `.hidden {display:none}`
+// (sin !important, style.css:3924) NO puede sobrescribir un inline → hay que
+// prender/apagar el display por JS. Si no, el panel del libro queda SIEMPRE
+// visible (vacío al no haber libro) y sus botones ◀▶ disparan /book/null.
 function _showBrowser() {
-  if (browserPane) browserPane.classList.remove('hidden');
-  if (readerPane) readerPane.classList.add('hidden');
+  if (browserPane) { browserPane.classList.remove('hidden'); browserPane.style.display = ''; }
+  if (readerPane) { readerPane.classList.add('hidden'); readerPane.style.display = 'none'; }
   if (backBtn) backBtn.style.display = state.view === 'libraries' ? 'none' : '';
 }
 
 function _showReader() {
-  if (browserPane) browserPane.classList.add('hidden');
-  if (readerPane) readerPane.classList.remove('hidden');
+  if (browserPane) { browserPane.classList.add('hidden'); browserPane.style.display = 'none'; }
+  if (readerPane) { readerPane.classList.remove('hidden'); readerPane.style.display = 'flex'; }
   if (backBtn) backBtn.style.display = '';
+}
+
+// ── filtro/búsqueda del navegador (client-side sobre la lista actual) ────────
+function _resetFilter() {
+  if (filterEl) filterEl.value = '';
+}
+
+function _applyFilter() {
+  if (!filterEl || !listEl) return;
+  const q = filterEl.value.trim().toLowerCase();
+  listEl.querySelectorAll('.kavita-row').forEach((row) => {
+    const txt = (row.textContent || '').toLowerCase();
+    row.style.display = (!q || txt.includes(q)) ? '' : 'none';
+  });
 }
 
 // ── navigation: libraries ──────────────────────────────────────────────────
@@ -152,6 +171,7 @@ async function _loadLibraries() {
   _setLoading(true);
   _setBreadcrumb([]);
   _setTitle('Biblioteca');
+  _resetFilter();
   listEl.innerHTML = '';
   try {
     const data = await _fetchJSON(`${API}/libraries`);
@@ -189,6 +209,7 @@ async function _openLibrary(libraryId, libraryName) {
   _setLoading(true);
   _setBreadcrumb([libraryName]);
   _setTitle(libraryName);
+  _resetFilter();
   listEl.innerHTML = '';
   try {
     const data = await _fetchJSON(`${API}/series?libraryId=${encodeURIComponent(libraryId)}`);
@@ -225,6 +246,7 @@ async function _openSeries(seriesId, seriesName) {
   _setLoading(true);
   _setBreadcrumb([seriesName]);
   _setTitle(seriesName);
+  _resetFilter();
   listEl.innerHTML = '';
   try {
     const data = await _fetchJSON(`${API}/series/${encodeURIComponent(seriesId)}/volumes`);
@@ -259,6 +281,12 @@ async function _openSeries(seriesId, seriesName) {
 // ── reader ─────────────────────────────────────────────────────────────────
 
 async function _openChapter(chapterId, chapterName, volumeId) {
+  // Guard: nunca abrir el lector con un id inválido (evita fetch /book/null y
+  // el 422 críptico que veía el usuario). Mensaje accionable, no traceback.
+  if (chapterId == null || chapterId === 'null' || chapterId === '') {
+    _showError('No se pudo abrir el libro: Kavita no devolvió un id de capítulo para este título.');
+    return;
+  }
   state.view = 'reader';
   state.chapterId = chapterId;
   state.volumeId = volumeId ?? null;
@@ -665,6 +693,11 @@ function _wire() {
   const ttsBtn = _el('kavita-tts-btn');
   if (ttsBtn) {
     ttsBtn.addEventListener('click', () => bookTTS.toggle());
+  }
+
+  // Filtro/búsqueda de la lista actual (bibliotecas/series/capítulos).
+  if (filterEl) {
+    filterEl.addEventListener('input', _applyFilter);
   }
 
   // TOC toggle.
