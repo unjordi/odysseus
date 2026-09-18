@@ -1,0 +1,18 @@
+name: no-telemetria
+
+# Guard de vocabulario: falla si un PR INTRODUCE la palabra baneada "telemetr*" en cambios nuestros.
+# Respeta lo heredado de upstream/terceros (solo mira el diff contra la base). Ver scripts/check-no-telemetria.sh.
+
+on:
+  pull_request:
+    branches: [develop, main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Guard - no introducir "telemetr*"
+        run: bash scripts/check-no-telemetria.sh "origin/${{ github.base_ref }}"
