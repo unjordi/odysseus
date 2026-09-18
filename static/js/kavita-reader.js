@@ -274,8 +274,10 @@ async function _openChapter(chapterId, chapterName) {
   _loadToc();
 }
 
+// Devuelve true si cargó una página real; false si fue fin-de-libro o error
+// (lo usa el lector en voz alta para saber si auto-avanzar o detenerse).
 async function _loadPage(pageNum) {
-  if (state.loading) return;
+  if (state.loading) return false;
   state.loading = true;
   pageEl.innerHTML = '<div style="opacity:0.6;padding:24px;text-align:center;">Cargando…</div>';
   try {
@@ -285,17 +287,21 @@ async function _loadPage(pageNum) {
     pageIndicator.textContent = `pág. ${pageNum}`;
     prevBtn.disabled = pageNum <= 0;
     nextBtn.disabled = false;
+    return true;
   } catch (e) {
     // If it's a 404/400 on a high page, treat as end-of-book.
     if (e.status === 404 || e.status === 400) {
       pageEl.innerHTML = '<div style="padding:24px;text-align:center;opacity:0.7;">Fin del libro.</div>';
       nextBtn.disabled = true;
       prevBtn.disabled = state.page <= 0;
-      state.loading = false;
-      return;
+      return false;
     }
     pageEl.innerHTML = '';
     _showError(_friendlyError(e));
+    return false;
+  } finally {
+    // SIEMPRE liberar el candado — antes el camino de éxito lo dejaba en true
+    // y bloqueaba toda navegación posterior (prev/next/TOC muertos tras la 1ª pág).
     state.loading = false;
   }
 }
@@ -345,6 +351,7 @@ function _renderTocEntries(entries, container) {
     if (page != null) {
       item.title = `Ir a página ${page}`;
       item.addEventListener('click', () => {
+        bookTTS.stop();
         _loadPage(page);
         tocEl.classList.add('hidden');
       });
@@ -374,6 +381,184 @@ function _friendlyError(e) {
   return msg;
 }
 
+// ── lectura en voz alta del libro (Slice 3) ─────────────────────────────────
+//
+// Reutiliza el TTS multi-provider del fork (POST /api/tts/synthesize, con caché
+// server-side + config de proveedor/voz/velocidad en Ajustes → Voz), y el
+// fallback de navegador (Web Speech API) cuando el proveedor es "browser".
+// El PROGRESO DE AUDIO ES EL PROGRESO DE LECTURA: cada segmento hablado se
+// resalta y se centra; al terminar la página, auto-avanza a la siguiente.
+
+const bookTTS = {
+  active: false,
+  segments: [],
+  idx: 0,
+  audio: null,
+  provider: 'disabled',
+  browser: false,
+  voice: '',
+  speed: 1,
+  cache: new Map(),   // texto → objectURL (caché de audio del cliente)
+
+  async _loadStats() {
+    try {
+      const s = await _fetchJSON('/api/tts/stats');
+      this.provider = s.provider || 'disabled';
+      this.voice = s.voice || '';
+      this.speed = s.speed || 1;
+      this.browser = this.provider === 'browser';
+      if (this.browser) return 'speechSynthesis' in window;
+      return !!(s.available && s.ready);
+    } catch (_) {
+      return false;
+    }
+  },
+
+  // Segmenta el HTML renderizado por Kavita en bloques de texto legibles.
+  _collectSegments() {
+    const out = [];
+    const blocks = pageEl.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote, dd, dt');
+    if (!blocks.length) {
+      const t = (pageEl.textContent || '').replace(/\s+/g, ' ').trim();
+      if (t) out.push({ el: pageEl, text: t });
+      return out;
+    }
+    blocks.forEach((el) => {
+      // Evita duplicar: si el bloque contiene otros bloques que también recolectamos.
+      if (el.querySelector('p, li, h1, h2, h3, h4, h5, h6, blockquote, dd, dt')) return;
+      const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (text) out.push({ el, text });
+    });
+    return out;
+  },
+
+  async toggle() {
+    if (this.active) { this.stop(); return; }
+    _clearError();
+    const ok = await this._loadStats();
+    if (!ok) {
+      _showError('Lectura en voz alta no disponible: actívala en Ajustes → Voz (proveedor de TTS).');
+      return;
+    }
+    this.active = true;
+    _ttsBtnState(true);
+    this.segments = this._collectSegments();
+    this.idx = 0;
+    if (!this.segments.length) {
+      // Página sin texto (portada/imagen): intenta avanzar hasta hallar texto.
+      const advanced = await this._nextPage();
+      if (!advanced) { _showError('No hay texto que leer en esta página.'); this.stop(); return; }
+    }
+    this._playLoop();
+  },
+
+  stop() {
+    this.active = false;
+    if (this.audio) { try { this.audio.pause(); } catch (_) {} this.audio = null; }
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    this._clearHighlight();
+    _ttsBtnState(false);
+  },
+
+  _clearHighlight() {
+    pageEl.querySelectorAll('.kavita-tts-active').forEach((el) => el.classList.remove('kavita-tts-active'));
+  },
+
+  async _playLoop() {
+    while (this.active) {
+      if (this.idx >= this.segments.length) {
+        const advanced = await this._nextPage();
+        if (!advanced) { this.stop(); return; }
+        continue;
+      }
+      const seg = this.segments[this.idx];
+      this._clearHighlight();
+      if (seg.el && seg.el.classList) {
+        seg.el.classList.add('kavita-tts-active');
+        try { seg.el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (_) {}
+      }
+      try {
+        await this._speak(seg.text);
+      } catch (e) {
+        if (this.active) _showError('Error de lectura en voz alta: ' + (e && e.message ? e.message : e));
+        this.stop();
+        return;
+      }
+      if (!this.active) return;
+      this.idx += 1;
+    }
+  },
+
+  async _nextPage() {
+    const ok = await _loadPage(state.page + 1);
+    if (!ok || !this.active) return false;
+    this.segments = this._collectSegments();
+    this.idx = 0;
+    // Salta páginas sin texto (imágenes) sin abortar la lectura.
+    if (!this.segments.length) return this._nextPage();
+    return true;
+  },
+
+  async _speak(text) {
+    if (this.browser) {
+      return new Promise((resolve, reject) => {
+        const u = new SpeechSynthesisUtterance(text);
+        const v = this._browserVoice();
+        if (v) u.voice = v;
+        u.rate = this.speed || 1;
+        u.onend = () => resolve();
+        u.onerror = (e) => reject(new Error('TTS del navegador: ' + (e && e.error ? e.error : 'fallo')));
+        window.speechSynthesis.speak(u);
+      });
+    }
+    const url = await this._audioUrl(text);
+    return new Promise((resolve, reject) => {
+      const audio = new Audio(url);
+      // El proveedor local no aplica velocidad server-side → la aplica el reproductor.
+      if (this.provider === 'local' && this.speed !== 1) audio.playbackRate = this.speed;
+      this.audio = audio;
+      audio.onended = () => { if (this.audio === audio) this.audio = null; resolve(); };
+      audio.onerror = () => reject(new Error('fallo al reproducir el audio'));
+      audio.play().catch(reject);
+    });
+  },
+
+  async _audioUrl(text) {
+    if (this.cache.has(text)) return this.cache.get(text);
+    const res = await fetch('/api/tts/synthesize', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text.slice(0, 5000), format: 'audio' }),
+    });
+    if (!res.ok) {
+      let msg = 'la síntesis de voz falló';
+      try { const b = await res.json(); msg = (b.detail && b.detail.message) || msg; } catch (_) {}
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    this.cache.set(text, url);
+    return url;
+  },
+
+  _browserVoice() {
+    if (!this.voice) return null;
+    const vs = window.speechSynthesis.getVoices();
+    const t = this.voice.toLowerCase();
+    return vs.find((v) => v.name.toLowerCase() === t) ||
+           vs.find((v) => v.name.toLowerCase().includes(t)) || null;
+  },
+};
+
+function _ttsBtnState(on) {
+  const btn = _el('kavita-tts-btn');
+  if (!btn) return;
+  btn.textContent = on ? '⏹ Detener' : '🔊 Leer';
+  btn.style.background = on ? 'rgba(255,214,10,0.22)' : '';
+  btn.title = on ? 'Detener la lectura en voz alta' : 'Leer el libro en voz alta';
+}
+
 // ── wiring ─────────────────────────────────────────────────────────────────
 
 function _wire() {
@@ -396,12 +581,13 @@ function _wire() {
 
   // Close.
   if (closeBtn && modal) {
-    closeBtn.addEventListener('click', () => modal.classList.add('hidden'));
+    closeBtn.addEventListener('click', () => { bookTTS.stop(); modal.classList.add('hidden'); });
   }
 
   // Back.
   if (backBtn) {
     backBtn.addEventListener('click', () => {
+      bookTTS.stop();
       if (state.view === 'reader') {
         // Go back to chapters.
         state.view = 'chapters';
@@ -427,16 +613,25 @@ function _wire() {
     });
   }
 
-  // Reader nav.
+  // Reader nav. La navegación MANUAL detiene la lectura en voz alta (evita
+  // que el resaltado/audio se desincronice de la página que el usuario eligió).
   if (prevBtn) {
     prevBtn.addEventListener('click', () => {
+      bookTTS.stop();
       if (state.page > 0) _loadPage(state.page - 1);
     });
   }
   if (nextBtn) {
     nextBtn.addEventListener('click', () => {
+      bookTTS.stop();
       _loadPage(state.page + 1);
     });
+  }
+
+  // Lectura en voz alta (toggle).
+  const ttsBtn = _el('kavita-tts-btn');
+  if (ttsBtn) {
+    ttsBtn.addEventListener('click', () => bookTTS.toggle());
   }
 
   // TOC toggle.
@@ -450,13 +645,16 @@ function _wire() {
   document.addEventListener('keydown', (e) => {
     if (!modal || modal.classList.contains('hidden')) return;
     if (e.key === 'Escape') {
+      bookTTS.stop();
       modal.classList.add('hidden');
     } else if (state.view === 'reader') {
       if (e.key === 'ArrowLeft' && state.page > 0) {
         e.preventDefault();
+        bookTTS.stop();
         _loadPage(state.page - 1);
       } else if (e.key === 'ArrowRight') {
         e.preventDefault();
+        bookTTS.stop();
         _loadPage(state.page + 1);
       }
     }
@@ -465,8 +663,20 @@ function _wire() {
 
 // ── init ───────────────────────────────────────────────────────────────────
 
+function _injectTtsStyle() {
+  if (document.getElementById('kavita-tts-style')) return;
+  const st = document.createElement('style');
+  st.id = 'kavita-tts-style';
+  st.textContent =
+    '.kavita-tts-active{background:rgba(255,214,10,0.35)!important;' +
+    'border-radius:3px;box-shadow:0 0 0 3px rgba(255,214,10,0.25);' +
+    'transition:background .2s;}';
+  document.head.appendChild(st);
+}
+
 function _init() {
   _initDom();
+  _injectTtsStyle();
   _wire();
 }
 
