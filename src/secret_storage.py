@@ -20,6 +20,7 @@ single migration pass rewrites them.
 
 import os
 import logging
+import os
 from pathlib import Path
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -39,9 +40,25 @@ def _load_or_create_key() -> bytes:
         return _KEY_PATH.read_bytes()
     _KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
     key = Fernet.generate_key()
-    _KEY_PATH.write_bytes(key)
-    # POSIX: lock the key to 0o600. Windows: no-op (the user-profile data dir is
-    # already ACL-restricted); safe_chmod swallows both cases.
+    # Create the key file ATOMICALLY and RESTRICTED from the start:
+    #  - O_CREAT|O_EXCL: only ONE process wins the first-boot race. Without it,
+    #    two workers starting together both generate DIFFERENT keys and the last
+    #    write wins — anything already encrypted with the loser's key becomes
+    #    permanently undecryptable (InvalidToken). The loser just reads the
+    #    winner's key below, so everyone shares ONE key.
+    #  - mode 0o600 at open time: closes the window where write_bytes() + a later
+    #    chmod left the key briefly world-readable (0o644 under the default umask).
+    try:
+        fd = os.open(_KEY_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        # Another worker created it in the race — use theirs (single shared key).
+        return _KEY_PATH.read_bytes()
+    try:
+        os.write(fd, key)
+    finally:
+        os.close(fd)
+    # Defense-in-depth: on POSIX re-assert 0o600 (umask could still loosen O_CREAT
+    # mode bits on some setups). Windows: no-op (data dir is ACL-restricted).
     safe_chmod(_KEY_PATH, 0o600)
     logger.info(f"Generated new app key at {_KEY_PATH}")
     return key
