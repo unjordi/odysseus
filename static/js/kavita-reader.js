@@ -85,6 +85,7 @@ const state = {
 let modal, closeBtn, backBtn, titleEl, breadcrumbEl;
 let browserPane, errorEl, loadingEl, listEl, filterEl;
 let readerPane, prevBtn, nextBtn, pageIndicator, tocToggle, tocEl, pageEl;
+let ttsVoiceEl, ttsSpeedEl;
 
 function _initDom() {
   modal = _el('kavita-modal');
@@ -104,6 +105,8 @@ function _initDom() {
   tocToggle = _el('kavita-toc-toggle');
   tocEl = _el('kavita-toc');
   pageEl = _el('kavita-page');
+  ttsVoiceEl = _el('kavita-tts-voice');
+  ttsSpeedEl = _el('kavita-tts-speed');
 }
 
 // ── UI helpers ─────────────────────────────────────────────────────────────
@@ -149,6 +152,8 @@ function _showReader() {
   if (browserPane) { browserPane.classList.add('hidden'); browserPane.style.display = 'none'; }
   if (readerPane) { readerPane.classList.remove('hidden'); readerPane.style.display = 'flex'; }
   if (backBtn) backBtn.style.display = '';
+  // Reflejar la voz/velocidad reales en los knobs de la barra (never-throws).
+  _syncTtsControls().catch(() => {});
 }
 
 // ── filtro/búsqueda del navegador (client-side sobre la lista actual) ────────
@@ -646,6 +651,92 @@ function _ttsBtnState(on) {
   btn.title = on ? 'Detener la lectura en voz alta' : 'Leer el libro en voz alta';
 }
 
+// ── Controles de voz + velocidad EN LA BARRA DEL LECTOR ──────────────────────
+// Los knobs viven también en Ajustes → Voz, pero enterrados; aquí quedan a la
+// mano mientras se lee. Espejan la MISMA lista de voces de settings.js y guardan
+// por el MISMO endpoint (POST /api/auth/settings), luego limpian la caché de
+// audio (cliente + server) para que el cambio se oiga de inmediato.
+const _KOKORO_VOICE_GROUPS = [
+  ['Español', [['ef_dora', 'Dora (♀ es)'], ['em_alex', 'Alex (♂ es)'], ['em_santa', 'Santa (♂ es)']]],
+  ['English (US)', [['af_heart', 'Heart (♀)'], ['af_bella', 'Bella (♀)'], ['af_nicole', 'Nicole (♀)'], ['af_sarah', 'Sarah (♀)'], ['am_michael', 'Michael (♂)'], ['am_adam', 'Adam (♂)']]],
+  ['English (UK)', [['bf_emma', 'Emma (♀)'], ['bf_isabella', 'Isabella (♀)'], ['bm_george', 'George (♂)'], ['bm_lewis', 'Lewis (♂)']]],
+];
+const _OPENAI_VOICES = [['alloy', 'Alloy'], ['ash', 'Ash'], ['coral', 'Coral'], ['echo', 'Echo'], ['fable', 'Fable'], ['nova', 'Nova'], ['onyx', 'Onyx'], ['sage', 'Sage'], ['shimmer', 'Shimmer']];
+
+function _populateVoiceSelect(provider, current) {
+  if (!ttsVoiceEl) return;
+  ttsVoiceEl.innerHTML = '';
+  const isKokoro = provider === 'kokoro' || provider === 'local';
+  if (isKokoro) {
+    _KOKORO_VOICE_GROUPS.forEach(([label, voices]) => {
+      const og = document.createElement('optgroup');
+      og.label = label;
+      voices.forEach(([val, txt]) => {
+        const o = document.createElement('option');
+        o.value = val; o.textContent = txt; og.appendChild(o);
+      });
+      ttsVoiceEl.appendChild(og);
+    });
+  } else {
+    _OPENAI_VOICES.forEach(([val, txt]) => {
+      const o = document.createElement('option');
+      o.value = val; o.textContent = txt; ttsVoiceEl.appendChild(o);
+    });
+  }
+  // Si la voz actual no está en la lista (voz libre / provider raro), añádela.
+  if (current && !ttsVoiceEl.querySelector('option[value="' + current.replace(/"/g, '') + '"]')) {
+    const o = document.createElement('option');
+    o.value = current; o.textContent = current; ttsVoiceEl.appendChild(o);
+  }
+  if (current) ttsVoiceEl.value = current;
+}
+
+async function _saveTtsSetting(body) {
+  try {
+    await fetch('/api/auth/settings', {
+      method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+  } catch (_) { /* fire-and-forget */ }
+  // Cambió la voz/velocidad → la caché anterior ya no aplica.
+  bookTTS.cache.clear();
+  fetch('/api/tts/clear-cache', { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+}
+
+// Sincroniza los selects con el estado real del TTS. En proveedor "browser" el
+// TTS usa voces del SO (no de esta lista) → se ocultan los knobs. Never-throws.
+async function _syncTtsControls() {
+  if (!ttsVoiceEl || !ttsSpeedEl) return;
+  await bookTTS._loadStats();
+  const prov = bookTTS.provider || 'disabled';
+  if (prov === 'disabled' || prov === 'browser') {
+    ttsVoiceEl.style.display = 'none';
+    ttsSpeedEl.style.display = 'none';
+    return;
+  }
+  _populateVoiceSelect(prov, bookTTS.voice || '');
+  ttsSpeedEl.value = String(bookTTS.speed || 1);
+  ttsVoiceEl.style.display = '';
+  ttsSpeedEl.style.display = '';
+}
+
+function _wireTtsControls() {
+  if (ttsVoiceEl) {
+    ttsVoiceEl.addEventListener('change', async () => {
+      const v = ttsVoiceEl.value;
+      bookTTS.voice = v;
+      await _saveTtsSetting({ tts_voice: v });
+    });
+  }
+  if (ttsSpeedEl) {
+    ttsSpeedEl.addEventListener('change', async () => {
+      const s = ttsSpeedEl.value;
+      bookTTS.speed = Number(s) || 1;
+      await _saveTtsSetting({ tts_speed: s });
+    });
+  }
+}
+
 // ── wiring ─────────────────────────────────────────────────────────────────
 
 function _wire() {
@@ -720,6 +811,9 @@ function _wire() {
   if (ttsBtn) {
     ttsBtn.addEventListener('click', () => bookTTS.toggle());
   }
+
+  // Knobs de voz + velocidad en la barra del lector.
+  _wireTtsControls();
 
   // Filtro/búsqueda de la lista actual (bibliotecas/series/capítulos).
   if (filterEl) {
