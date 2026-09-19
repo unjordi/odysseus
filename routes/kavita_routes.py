@@ -255,4 +255,27 @@ def setup_kavita_routes():
         media_type = upstream_ct if upstream_ct else "application/octet-stream"
         return Response(content=data, media_type=media_type)
 
+    @router.get("/series/{seriesId}/cover")
+    async def get_series_cover(request: Request, seriesId: int):
+        """La portada (thumbnail) de una serie, para la vista cuadrícula.
+
+        Proxya /api/Image/series-cover de Kavita (con la auth del conector) y
+        reenvía el Content-Type. Cacheable en el navegador (las portadas rara
+        vez cambian) → 1 hora.
+        """
+        get_current_user(request)
+        series_id = _to_int(seriesId, "seriesId")
+        try:
+            with KavitaLibrary() as lib:
+                data, headers = lib.get_series_cover(series_id)
+        except KavitaError as e:
+            raise _kavita_http_error(e)
+        upstream_ct = headers.get("content-type") or headers.get("Content-Type")
+        media_type = upstream_ct if upstream_ct else "image/jpeg"
+        return Response(
+            content=data,
+            media_type=media_type,
+            headers={"Cache-Control": "private, max-age=3600"},
+        )
+
     return router

@@ -254,3 +254,14 @@ class KavitaLibrary:
         return self.client.get_bytes_with_headers(
             f"/api/Book/{chapter_id}/book-resources", params={"file": file}
         )
+
+    def get_series_cover(self, series_id: int) -> tuple[bytes, dict]:
+        """GET /api/Image/series-cover?seriesId={id} → (bytes, headers).
+
+        The series thumbnail, for the grid view. Returns the raw image bytes
+        plus upstream headers so the route can forward the Content-Type.
+        Defensive: raises KavitaError (named cause) on transport/auth/HTTP.
+        """
+        return self.client.get_bytes_with_headers(
+            "/api/Image/series-cover", params={"seriesId": series_id}
+        )
