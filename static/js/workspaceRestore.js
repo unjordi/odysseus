@@ -59,6 +59,49 @@ function _applyGeom(modal, geom) {
   return true;
 }
 
+// #29(e) DURABILIDAD — re-clampar al viewport toda tool-window FLOTANTE cuando
+// el viewport cambia de tamaño. El restore de arriba solo clampa al REABRIR
+// (path de reload). Si el usuario encoge el navegador —o el área útil se reduce
+// tras el arranque— con una ventana cuya geom guardada quedó abajo (p. ej.
+// host-stats en y:832), esa ventana queda FUERA de pantalla y NUNCA se corrige
+// sin un reload. Esto la re-mete al viewport en vivo y PERSISTE la geom
+// corregida (para que tampoco reviva off-screen en el próximo arranque).
+// Solo toca ventanas flotantes (position:fixed + left/top inline) y visibles;
+// las dockeadas (CSS) o minimizadas no se tocan. No-op si ya está dentro (cero
+// regresión visual). Never-throws por ventana.
+export function clampOpenWindowsToViewport() {
+  try {
+    const contents = document.querySelectorAll('.modal:not(.hidden) .modal-content');
+    contents.forEach((content) => {
+      try {
+        if (!content || !content.style) return;
+        if (content.style.position !== 'fixed') return;
+        if (!content.style.left && !content.style.top) return;
+        const modal = content.closest('.modal');
+        if (modal && (modal.classList.contains('modal-minimized')
+          || modal.classList.contains('modal-right-docked')
+          || modal.classList.contains('modal-left-docked'))) return;
+        const r = content.getBoundingClientRect();
+        if (!r || ![r.left, r.top, r.width, r.height].every((n) => Number.isFinite(n))) return;
+        const cur = { x: r.left, y: r.top, w: r.width, h: r.height };
+        const c = _clampGeom(cur);
+        if (c.x === cur.x && c.y === cur.y && c.w === cur.w && c.h === cur.h) return;
+        content.style.setProperty('left', c.x + 'px', 'important');
+        content.style.setProperty('top', c.y + 'px', 'important');
+        content.style.setProperty('width', c.w + 'px', 'important');
+        content.style.setProperty('height', c.h + 'px', 'important');
+        content.style.setProperty('max-height', c.h + 'px', 'important');
+        const id = (modal && modal.id) || content.id || null;
+        if (id && WorkspaceState && typeof WorkspaceState.setGeometry === 'function') {
+          WorkspaceState.setGeometry(id, c);
+        }
+      } catch (_) { /* per-window never-throws */ }
+    });
+  } catch (e) {
+    console.warn('[workspaceRestore] viewport clamp failed:', e);
+  }
+}
+
 // Transient popovers that happen to be modal-shaped. Reopening these on every
 // load would be noise, not restoration.
 const NEVER_RESTORE = new Set([
@@ -123,4 +166,4 @@ export async function restoreWorkspace() {
   }
 }
 
-export default { restoreWorkspace };
+export default { restoreWorkspace, clampOpenWindowsToViewport };

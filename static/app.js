@@ -39,7 +39,7 @@ import './js/modalManager.js?v=20260723compareicon2';
 // Shell state (roadmap #29): the per-user record of which modules are open and
 // in which mode, plus the boot pass that puts them back after a reload or a
 // signout/signin.
-import { restoreWorkspace } from './js/workspaceRestore.js';
+import { restoreWorkspace, clampOpenWindowsToViewport } from './js/workspaceRestore.js';
 // Desktop window tiling — drag a modal near an edge/corner to snap.
 import './js/tileManager.js';
 import themeModule from './js/theme.js';
@@ -4439,6 +4439,21 @@ function startOdysseusApp() {
   // visible), and it is what arms the shell's state tracking — until it
   // finishes, no "this is closed" is recorded over the state being restored.
   setTimeout(() => { restoreWorkspace(); }, 400);
+
+  // #29(e) DURABILIDAD — mantener las tool-windows flotantes DENTRO del viewport.
+  // El restore solo clampa al reabrir; sin esto, una ventana con geom guardada
+  // abajo (el "se desfasó" recurrente del host-stats) queda fuera de pantalla si
+  // el navegador se encoge o si el área útil se reduce tras el arranque. Se
+  // re-clampa: (1) una vez ~1.2s tras el restore (el área útil ya asentó) y
+  // (2) en cada resize del viewport (debounced). No-op si ya está dentro.
+  setTimeout(() => { try { clampOpenWindowsToViewport(); } catch (_) {} }, 1200);
+  {
+    let _clampT = null;
+    window.addEventListener('resize', () => {
+      if (_clampT) clearTimeout(_clampT);
+      _clampT = setTimeout(() => { try { clampOpenWindowsToViewport(); } catch (_) {} }, 150);
+    });
+  }
 
   const runNonCriticalStartup = (fn, delay = 4000) => {
     let tries = 0;
