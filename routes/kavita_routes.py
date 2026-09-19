@@ -118,6 +118,29 @@ def setup_kavita_routes():
             raise _kavita_http_error(e)
         return {"series": series}
 
+    @router.get("/people")
+    async def list_people(request: Request):
+        """Lista de personas/autores (para la vista 'por autor')."""
+        get_current_user(request)
+        try:
+            with KavitaLibrary() as lib:
+                people = lib.list_people()
+        except KavitaError as e:
+            raise _kavita_http_error(e)
+        return {"people": people}
+
+    @router.get("/people/{personId}/series")
+    async def list_series_by_person(request: Request, personId: int):
+        """Series donde la persona es writer (para 'por autor')."""
+        get_current_user(request)
+        person_id = _to_int(personId, "personId")
+        try:
+            with KavitaLibrary() as lib:
+                series = lib.list_series_by_person(person_id)
+        except KavitaError as e:
+            raise _kavita_http_error(e)
+        return {"series": series}
+
     @router.get("/series/{seriesId}/volumes")
     async def list_volumes(request: Request, seriesId: int):
         """List volumes/chapters for a series."""

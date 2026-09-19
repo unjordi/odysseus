@@ -114,6 +114,31 @@ class KavitaLibrary:
             data = self.client.post("/api/Series/all-v2", json={})
         return _as_list(data)
 
+    def list_people(self) -> list[dict]:
+        """GET /api/Metadata/people → lista de personas (autores/writers, etc.).
+
+        Cada persona: {id, name, coverImage, roles, ...}. Para la vista "por
+        autor" de la biblioteca. Defensive: [] en formas raras.
+        """
+        data = self.client.get("/api/Metadata/people")
+        return _as_list(data)
+
+    def list_series_by_person(self, person_id: int) -> list[dict]:
+        """Series donde la persona es WRITER, vía POST /api/Series/all-v2.
+
+        El filtro usa FilterField 17 (writers) — verificado en vivo contra la
+        instancia: field 17 + comparison 0 (equals) + value=personId devuelve
+        las series de ese autor. combination 1 (AND). Defensive: [] en formas raras.
+        """
+        body = {
+            "statements": [{"comparison": 0, "field": 17, "value": str(person_id)}],
+            "combination": 1,
+            "limitTo": 0,
+            "sortOptions": {"sortField": 1, "isAscending": True},
+        }
+        data = self.client.post("/api/Series/all-v2", json=body)
+        return _as_list(data)
+
     def get_series(self, series_id: int) -> dict:
         """GET /api/Series/{seriesId} → a single series dict.
 
