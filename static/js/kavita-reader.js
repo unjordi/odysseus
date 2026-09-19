@@ -72,6 +72,7 @@ const state = {
   libraryId: null,
   seriesId: null,
   chapterId: null,
+  series: [],               // series de la biblioteca actual (para re-render list/grid)
   volumeId: null,          // para escribir progreso de vuelta a Kavita (Slice 2c)
   page: 0,
   totalPages: null,
@@ -86,6 +87,15 @@ let modal, closeBtn, backBtn, titleEl, breadcrumbEl;
 let browserPane, errorEl, loadingEl, listEl, filterEl;
 let readerPane, prevBtn, nextBtn, pageIndicator, tocToggle, tocEl, pageEl;
 let ttsVoiceEl, ttsSpeedEl;
+let viewToggleEl, viewListBtn, viewGridBtn;
+
+// Vista del navegador de series: 'list' | 'grid'. Persistida por usuario (local).
+const BROWSE_VIEW_KEY = 'odysseus.kavita.browseView';
+function _getBrowseView() {
+  try { const v = localStorage.getItem(BROWSE_VIEW_KEY); if (v === 'grid' || v === 'list') return v; } catch (_) {}
+  return 'list';
+}
+function _setBrowseViewPref(v) { try { localStorage.setItem(BROWSE_VIEW_KEY, v); } catch (_) {} }
 
 function _initDom() {
   modal = _el('kavita-modal');
@@ -107,6 +117,9 @@ function _initDom() {
   pageEl = _el('kavita-page');
   ttsVoiceEl = _el('kavita-tts-voice');
   ttsSpeedEl = _el('kavita-tts-speed');
+  viewToggleEl = _el('kavita-view-toggle');
+  viewListBtn = _el('kavita-view-list');
+  viewGridBtn = _el('kavita-view-grid');
 }
 
 // ── UI helpers ─────────────────────────────────────────────────────────────
@@ -178,6 +191,7 @@ async function _loadLibraries() {
   _setBreadcrumb([]);
   _setTitle('Biblioteca');
   _resetFilter();
+  _resetListLayout();
   listEl.innerHTML = '';
   try {
     const data = await _fetchJSON(`${API}/libraries`);
@@ -224,21 +238,80 @@ async function _openLibrary(libraryId, libraryName) {
       listEl.innerHTML = '<div style="opacity:0.6;padding:12px;">No hay series en esta biblioteca.</div>';
       return;
     }
-    series.forEach((s) => {
-      const id = s.id ?? s.seriesId ?? s.series_id;
-      const name = s.name || s.title || `Serie ${id}`;
-      const row = document.createElement('div');
-      row.className = 'kavita-row';
-      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:8px;cursor:pointer;border:1px solid rgba(128,128,128,0.15);background:rgba(128,128,128,0.04);';
-      row.innerHTML = `<span style="font-size:1.05em;">📖</span><span class="grow" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_escapeHtml(name)}</span>`;
-      row.addEventListener('click', () => _openSeries(id, name));
-      listEl.appendChild(row);
-    });
+    // La lista de series es la única vista con cuadrícula (portadas). El toggle
+    // se muestra aquí y se recuerda la preferencia; libraries/chapters son lista.
+    state.series = series;
+    if (viewToggleEl) { viewToggleEl.classList.remove('hidden'); viewToggleEl.style.display = 'flex'; }
+    _renderSeries();
   } catch (e) {
     _showError(_friendlyError(e));
   } finally {
     _setLoading(false);
   }
+}
+
+// Renderiza state.series como LISTA o CUADRÍCULA según la preferencia. La
+// cuadrícula usa portadas (proxy /api/kavita/series/{id}/cover) con loading=lazy
+// para no pedir 3558 imágenes de golpe. Ambas filas llevan .kavita-row para que
+// el filtro (que busca por textContent) siga funcionando en las dos vistas.
+function _renderSeries() {
+  if (!listEl) return;
+  const series = state.series || [];
+  const grid = _getBrowseView() === 'grid';
+  _applyViewButtons(grid);
+  listEl.innerHTML = '';
+  if (grid) {
+    listEl.style.display = 'grid';
+    listEl.style.gridTemplateColumns = 'repeat(auto-fill, minmax(120px, 1fr))';
+    listEl.style.gap = '12px';
+  } else {
+    listEl.style.display = 'flex';
+    listEl.style.flexDirection = 'column';
+    listEl.style.gap = '6px';
+  }
+  series.forEach((s) => {
+    const id = s.id ?? s.seriesId ?? s.series_id;
+    const name = s.name || s.title || `Serie ${id}`;
+    const el = document.createElement('div');
+    el.className = 'kavita-row';
+    if (grid) {
+      el.style.cssText = 'display:flex;flex-direction:column;gap:6px;cursor:pointer;border-radius:8px;overflow:hidden;border:1px solid rgba(128,128,128,0.15);background:rgba(128,128,128,0.04);padding:6px;';
+      el.innerHTML =
+        `<div style="aspect-ratio:2/3;width:100%;background:rgba(128,128,128,0.12);border-radius:5px;overflow:hidden;display:flex;align-items:center;justify-content:center;">`
+        + `<img loading="lazy" src="${API}/series/${encodeURIComponent(id)}/cover" alt="" `
+        + `style="width:100%;height:100%;object-fit:cover;" `
+        + `onerror="this.style.display='none';this.parentNode.textContent='📖';this.parentNode.style.fontSize='2em';"></div>`
+        + `<span style="font-size:0.8em;line-height:1.25;max-height:3.1em;overflow:hidden;">${_escapeHtml(name)}</span>`;
+    } else {
+      el.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:8px;cursor:pointer;border:1px solid rgba(128,128,128,0.15);background:rgba(128,128,128,0.04);';
+      el.innerHTML = `<span style="font-size:1.05em;">📖</span><span class="grow" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_escapeHtml(name)}</span>`;
+    }
+    el.addEventListener('click', () => _openSeries(id, name));
+    listEl.appendChild(el);
+  });
+  _applyFilter();
+}
+
+function _applyViewButtons(grid) {
+  const active = 'rgba(255,214,10,0.22)';
+  if (viewListBtn) viewListBtn.style.background = grid ? '' : active;
+  if (viewGridBtn) viewGridBtn.style.background = grid ? active : '';
+}
+
+function _setBrowseView(v) {
+  _setBrowseViewPref(v);
+  if (state.view === 'series') _renderSeries();
+}
+
+// Deja #kavita-list en modo lista (libraries/chapters no tienen cuadrícula) y
+// oculta el toggle. Se llama al entrar a esas vistas.
+function _resetListLayout() {
+  if (listEl) {
+    listEl.style.display = 'flex';
+    listEl.style.flexDirection = 'column';
+    listEl.style.gap = '6px';
+  }
+  if (viewToggleEl) { viewToggleEl.classList.add('hidden'); viewToggleEl.style.display = 'none'; }
 }
 
 // Etiqueta legible de un volumen. Kavita usa un `name` SENTINELA (número puro,
@@ -268,6 +341,7 @@ async function _openSeries(seriesId, seriesName) {
   _setBreadcrumb([seriesName]);
   _setTitle(seriesName);
   _resetFilter();
+  _resetListLayout();
   listEl.innerHTML = '';
   try {
     const data = await _fetchJSON(`${API}/series/${encodeURIComponent(seriesId)}/volumes`);
@@ -814,6 +888,10 @@ function _wire() {
 
   // Knobs de voz + velocidad en la barra del lector.
   _wireTtsControls();
+
+  // Toggle lista/cuadrícula del navegador de series.
+  if (viewListBtn) viewListBtn.addEventListener('click', () => _setBrowseView('list'));
+  if (viewGridBtn) viewGridBtn.addEventListener('click', () => _setBrowseView('grid'));
 
   // Filtro/búsqueda de la lista actual (bibliotecas/series/capítulos).
   if (filterEl) {
