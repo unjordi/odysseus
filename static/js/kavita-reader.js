@@ -795,7 +795,17 @@ const bookTTS = {
       this.audio = audio;
       audio.onended = () => { if (this.audio === audio) this.audio = null; resolve(); };
       audio.onerror = () => reject(new Error('fallo al reproducir el audio'));
-      audio.play().catch(reject);
+      // play() se RECHAZA con AbortError cuando detenemos (stop() llama pause()).
+      // Eso NO es un fallo: es el stop del usuario → resolver limpio, para no
+      // filtrar un "Uncaught AbortError" crudo a la consola (el _playLoop ya sale
+      // solo porque this.active pasó a false). Cualquier otro error sí propaga.
+      audio.play().catch((e) => {
+        if (e && (e.name === 'AbortError' || /interrupt|abort|pause/i.test(e.message || ''))) {
+          resolve();
+        } else {
+          reject(e);
+        }
+      });
     });
   },
 
