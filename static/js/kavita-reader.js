@@ -72,6 +72,8 @@ const state = {
   libraryId: null,
   seriesId: null,
   chapterId: null,
+  authorId: null,           // si venimos de la vista "por autor" (para el back)
+  authorName: null,
   series: [],               // series de la biblioteca actual (para re-render list/grid)
   volumeId: null,          // para escribir progreso de vuelta a Kavita (Slice 2c)
   page: 0,
@@ -96,6 +98,14 @@ function _getBrowseView() {
   return 'list';
 }
 function _setBrowseViewPref(v) { try { localStorage.setItem(BROWSE_VIEW_KEY, v); } catch (_) {} }
+
+// Eje del nivel superior: 'library' (bibliotecas) | 'author' (autores). Persistido.
+const BROWSE_MODE_KEY = 'odysseus.kavita.browseMode';
+function _getBrowseMode() {
+  try { const v = localStorage.getItem(BROWSE_MODE_KEY); if (v === 'author' || v === 'library') return v; } catch (_) {}
+  return 'library';
+}
+function _setBrowseModePref(v) { try { localStorage.setItem(BROWSE_MODE_KEY, v); } catch (_) {} }
 
 function _initDom() {
   modal = _el('kavita-modal');
@@ -185,6 +195,104 @@ function _applyFilter() {
 
 // ── navigation: libraries ──────────────────────────────────────────────────
 
+// Entrada del nivel superior: bifurca por el eje elegido (bibliotecas / autores).
+function _loadTop() {
+  if (_getBrowseMode() === 'author') _loadAuthors();
+  else _loadLibraries();
+}
+
+// Barra "📚 Bibliotecas / ✍️ Autores" — se prepende al listado del nivel superior.
+// Cambiar de eje recarga el nivel superior en el nuevo modo.
+function _renderTopModeBar() {
+  const mode = _getBrowseMode();
+  const bar = document.createElement('div');
+  bar.style.cssText = 'display:flex;gap:6px;margin-bottom:8px;';
+  const mk = (m, label) => {
+    const b = document.createElement('button');
+    b.className = 'memory-toolbar-btn';
+    b.textContent = label;
+    b.style.cssText = 'flex:1;padding:6px 8px;' + (mode === m ? 'background:rgba(255,214,10,0.22);' : '');
+    b.addEventListener('click', () => {
+      if (_getBrowseMode() === m) return;
+      _setBrowseModePref(m);
+      _loadTop();
+    });
+    return b;
+  };
+  bar.appendChild(mk('library', '📚 Bibliotecas'));
+  bar.appendChild(mk('author', '✍️ Autores'));
+  listEl.appendChild(bar);
+}
+
+// Vista "por autor": lista de personas (writers). Clic → sus libros (field 17).
+async function _loadAuthors() {
+  _clearError();
+  _setLoading(true);
+  _setBreadcrumb([]);
+  _setTitle('Autores');
+  _resetFilter();
+  _resetListLayout();
+  state.authorId = null;
+  state.view = 'libraries';   // nivel superior (reusa el slot del back)
+  listEl.innerHTML = '';
+  _renderTopModeBar();
+  try {
+    const data = await _fetchJSON(`${API}/people`);
+    const people = ((data && data.people) || [])
+      .filter((p) => p && (p.name || '').trim())
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    if (!people.length) {
+      listEl.insertAdjacentHTML('beforeend', '<div style="opacity:0.6;padding:12px;">No hay autores en Kavita.</div>');
+      return;
+    }
+    people.forEach((p) => {
+      const id = p.id ?? p.personId;
+      const name = p.name || `Autor ${id}`;
+      const row = document.createElement('div');
+      row.className = 'kavita-row';
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:8px;cursor:pointer;border:1px solid rgba(128,128,128,0.15);background:rgba(128,128,128,0.04);';
+      row.innerHTML = `<span style="font-size:1.05em;">✍️</span><span class="grow" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${_escapeHtml(name)}</span>`;
+      row.addEventListener('click', () => _openAuthor(id, name));
+      listEl.appendChild(row);
+    });
+  } catch (e) {
+    _showError(_friendlyError(e));
+  } finally {
+    _setLoading(false);
+  }
+}
+
+// Los libros de un autor (writer). Reusa _renderSeries (list/grid + portadas).
+async function _openAuthor(personId, personName) {
+  state.view = 'series';
+  state.libraryId = null;
+  state.authorId = personId;
+  state.authorName = personName;
+  state.seriesId = null;
+  _showBrowser();
+  _clearError();
+  _setLoading(true);
+  _setBreadcrumb([personName]);
+  _setTitle(personName);
+  _resetFilter();
+  listEl.innerHTML = '';
+  try {
+    const data = await _fetchJSON(`${API}/people/${encodeURIComponent(personId)}/series`);
+    const series = (data && data.series) || [];
+    if (!series.length) {
+      listEl.innerHTML = '<div style="opacity:0.6;padding:12px;">Este autor no tiene libros como escritor.</div>';
+      return;
+    }
+    state.series = series;
+    if (viewToggleEl) { viewToggleEl.classList.remove('hidden'); viewToggleEl.style.display = 'flex'; }
+    _renderSeries();
+  } catch (e) {
+    _showError(_friendlyError(e));
+  } finally {
+    _setLoading(false);
+  }
+}
+
 async function _loadLibraries() {
   _clearError();
   _setLoading(true);
@@ -192,12 +300,14 @@ async function _loadLibraries() {
   _setTitle('Biblioteca');
   _resetFilter();
   _resetListLayout();
+  state.authorId = null;
   listEl.innerHTML = '';
+  _renderTopModeBar();
   try {
     const data = await _fetchJSON(`${API}/libraries`);
     const libs = (data && data.libraries) || [];
     if (!libs.length) {
-      listEl.innerHTML = '<div style="opacity:0.6;padding:12px;">No hay bibliotecas en Kavita.</div>';
+      listEl.insertAdjacentHTML('beforeend', '<div style="opacity:0.6;padding:12px;">No hay bibliotecas en Kavita.</div>');
       return;
     }
     libs.forEach((lib) => {
@@ -824,10 +934,11 @@ function _wire() {
       state.libraryId = null;
       state.seriesId = null;
       state.chapterId = null;
+      state.authorId = null;
       state.page = 0;
       state.toc = [];
       _showBrowser();
-      _loadLibraries();
+      _loadTop();
     });
   }
 
@@ -854,13 +965,15 @@ function _wire() {
         _showBrowser();
         if (state.libraryId != null) {
           _openLibrary(state.libraryId, 'Biblioteca');
+        } else if (state.authorId != null) {
+          _openAuthor(state.authorId, state.authorName || 'Autor');
         } else {
-          _loadLibraries();
+          _loadTop();
         }
       } else if (state.view === 'series') {
         state.view = 'libraries';
         _showBrowser();
-        _loadLibraries();
+        _loadTop();
       }
     });
   }
