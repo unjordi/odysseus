@@ -256,12 +256,14 @@ class KavitaLibrary:
         )
 
     def get_series_cover(self, series_id: int) -> tuple[bytes, dict]:
-        """GET /api/Image/series-cover?seriesId={id} → (bytes, headers).
+        """GET /api/Image/series-cover?seriesId={id}&apiKey={key} → (bytes, headers).
 
-        The series thumbnail, for the grid view. Returns the raw image bytes
-        plus upstream headers so the route can forward the Content-Type.
-        Defensive: raises KavitaError (named cause) on transport/auth/HTTP.
+        The series thumbnail, for the grid view. Los endpoints /api/Image/* de
+        Kavita EXIGEN el apiKey como query param (están pensados para <img>, no
+        aceptan solo el JWT → sin él Kavita responde 400). Reenvía los headers
+        upstream para el Content-Type. Defensive: raises KavitaError on failure.
         """
         return self.client.get_bytes_with_headers(
-            "/api/Image/series-cover", params={"seriesId": series_id}
+            "/api/Image/series-cover",
+            params={"seriesId": series_id, "apiKey": self.client.api_key},
         )
