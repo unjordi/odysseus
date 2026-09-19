@@ -77,6 +77,7 @@ const state = {
   totalPages: null,
   toc: [],
   loading: false,
+  loadGen: 0,   // token de generación de cargas de página (anti "Cargando" trabado)
 };
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
@@ -352,11 +353,17 @@ function _saveProgress(pageNum) {
 // Devuelve true si cargó una página real; false si fue fin-de-libro o error
 // (lo usa el lector en voz alta para saber si auto-avanzar o detenerse).
 async function _loadPage(pageNum) {
-  if (state.loading) return false;
+  // Token de generación: cada carga se numera; una carga MÁS NUEVA supersede a la
+  // vieja. Antes un guard `if (state.loading) return` dejaba, cuando un load en
+  // vuelo del TTS quedaba huérfano al DETENER la lectura, state.loading=true, y
+  // BLOQUEABA toda navegación posterior → el lector se trababa en "Cargando".
+  // Con el token: un load nuevo siempre procede, y solo el ÚLTIMO pinta/libera.
+  const myGen = ++state.loadGen;
   state.loading = true;
   pageEl.innerHTML = '<div style="opacity:0.6;padding:24px;text-align:center;">Cargando…</div>';
   try {
     const html = await _fetchText(`${API}/book/${encodeURIComponent(state.chapterId)}/page?page=${encodeURIComponent(pageNum)}`);
+    if (myGen !== state.loadGen) return false;   // superado por una carga más nueva → descartar
     _injectPageHtml(html);
     state.page = pageNum;
     pageIndicator.textContent = `pág. ${pageNum}`;
@@ -365,6 +372,7 @@ async function _loadPage(pageNum) {
     _saveProgress(pageNum);   // write-back DELEGADO a Kavita (best-effort, Slice 2c)
     return true;
   } catch (e) {
+    if (myGen !== state.loadGen) return false;   // superado → no pintar error viejo
     // If it's a 404/400 on a high page, treat as end-of-book.
     if (e.status === 404 || e.status === 400) {
       pageEl.innerHTML = '<div style="padding:24px;text-align:center;opacity:0.7;">Fin del libro.</div>';
@@ -376,9 +384,8 @@ async function _loadPage(pageNum) {
     _showError(_friendlyError(e));
     return false;
   } finally {
-    // SIEMPRE liberar el candado — antes el camino de éxito lo dejaba en true
-    // y bloqueaba toda navegación posterior (prev/next/TOC muertos tras la 1ª pág).
-    state.loading = false;
+    // Solo la carga MÁS NUEVA libera el candado (una vieja superada no lo toca).
+    if (myGen === state.loadGen) state.loading = false;
   }
 }
 
@@ -556,7 +563,11 @@ const bookTTS = {
       try {
         await this._speak(seg.text);
       } catch (e) {
-        if (this.active) _showError('Error de lectura en voz alta: ' + (e && e.message ? e.message : e));
+        // Detener la lectura ABORTA el play() en vuelo (pause/quitar el <audio>):
+        // eso NO es un error real, es el stop del usuario → no lo mostramos.
+        const msg = (e && e.message) ? e.message : String(e);
+        const interrupted = /interrupt|removed from the document|abort|pause/i.test(msg);
+        if (this.active && !interrupted) _showError('Error de lectura en voz alta: ' + msg);
         this.stop();
         return;
       }
