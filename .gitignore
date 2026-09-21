@@ -41,7 +41,12 @@ services/data/
 
 # IDE / Editor
 .aider*
-.claude/
+# .claude/ se ignora salvo el cerebro per-módulo, que SÍ viaja con el fork
+# (decisión unjordi 2026-09-19). Lo volátil/per-usuario se re-ignora abajo.
+.claude/*
+!.claude/memory/
+.claude/memory/hilo-mental-actual.md
+.claude/memory/*.local.md
 .vscode/
 .idea/
 *.swp
