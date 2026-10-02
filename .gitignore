@@ -127,3 +127,7 @@ _scratch/
 /odysseus/
 .env.bak*
 .wt-*/
+# Estado per-máquina de hooks del cerebro (NO viaja; re-ensucia el árbol y rompía el CD de deploy)
+.claude/memory/.ramas-huerfanas-estado
+.claude/memory/.contexto-aviso.d/
+.claude/memory/.barrer-ramas/
