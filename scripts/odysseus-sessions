@@ -6,6 +6,9 @@
     odysseus-sessions archive SESSION_ID
     odysseus-sessions unarchive SESSION_ID
     odysseus-sessions delete SESSION_ID         # hard-delete (irreversible)
+    odysseus-sessions import --from FILE.json [--owner USER] [--name NAME] [--folder F]
+                                                # import a compacted CC/opencode export
+                                                # (see `axon export-opencode`) as a new session
 """
 
 from __future__ import annotations
@@ -15,7 +18,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "_lib"))
 from cli import quiet_logs, emit, fail, common_parser, run, REPO_ROOT as _REPO_ROOT
 quiet_logs()
 
-import argparse, json, logging, os, sys
+import argparse, json, logging, os, sys, uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 try:
@@ -99,6 +103,178 @@ def _set_archived(args, archived: bool):
         db.close()
 
 
+_IMPORT_TITLE_MAX = 180
+
+
+def _epoch_ms_to_iso(value) -> "str | None":
+    try:
+        ms = int(value)
+    except (TypeError, ValueError):
+        return None
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _load_export(path: str) -> dict:
+    """Load and shallow-validate a compacted CC/opencode export.
+
+    This is the exact shape produced by ``axon export-opencode`` (axon repo,
+    ``src/session/to-opencode.ts``): ``{"info": {...}, "messages": [{"info":
+    {role, ...}, "parts": [...]}]}``. No re-parsing of the original .jsonl and
+    no re-compaction happens here — the export already IS the compacted
+    surface (last compaction + live tail); this just maps it onto the
+    odysseus session/chat_messages schema.
+    """
+    p = Path(path)
+    if not p.is_file():
+        fail(f"no such file: {path}")
+    try:
+        data = json.loads(p.read_text())
+    except json.JSONDecodeError as e:
+        fail(f"{path} is not valid JSON: {e}")
+    if not isinstance(data, dict) or "messages" not in data or "info" not in data:
+        fail(f"{path} does not look like an axon export-opencode file "
+             "(expected top-level 'info' + 'messages')")
+    if not isinstance(data["messages"], list):
+        fail(f"{path}: 'messages' must be a list")
+    return data
+
+
+def _tool_synopsis(part: dict) -> str:
+    """One short line for a tool-call part — name + primary input, no output.
+
+    odysseus's own tool_events metadata (see core/models.py,
+    routes/chat_helpers.py) assumes shell-command semantics
+    (command/output/exit_code); it has no slot for CC's broader tool
+    taxonomy (read/edit/write/bash/task/skill/...). Rather than force-fit
+    those into tool_events (and risk odysseus' own tool-call UI trying to
+    "re-run" them), tool activity is flattened into a short inline text
+    marker inside the message content. Full inputs/outputs are NOT
+    duplicated here (they can be large) — they stay in the original axon
+    export JSON on disk if the detail is ever needed.
+    """
+    state = part.get("state") or {}
+    tool = part.get("tool") or "?"
+    status = state.get("status") or "?"
+    inp = state.get("input")
+    hint = ""
+    if isinstance(inp, dict):
+        for key in ("file_path", "command", "pattern", "path", "url", "query"):
+            if inp.get(key):
+                hint = f" {key}={inp[key]!r}"
+                break
+    return f"[tool:{tool}{hint} · {status}]"
+
+
+def _message_content(parts: list) -> str:
+    """Concatenate the text parts of one exported message (spec: parts[].text
+    joined), with a short tool-call synopsis appended so a tool-only turn
+    never persists as a blank row."""
+    text_bits = [
+        p.get("text", "") for p in parts
+        if p.get("type") == "text" and (p.get("text") or "").strip()
+    ]
+    text = "\n\n".join(bit.strip() for bit in text_bits if bit.strip())
+    tool_bits = [_tool_synopsis(p) for p in parts if p.get("type") == "tool"]
+    if tool_bits:
+        tool_block = "\n".join(tool_bits)
+        text = f"{text}\n\n{tool_block}" if text else tool_block
+    return text or "(mensaje vacío)"
+
+
+def _derive_title(info: dict, override: "str | None") -> str:
+    if override:
+        return override[:_IMPORT_TITLE_MAX]
+    raw = (info.get("title") or "").strip() or "Sesión importada de Claude Code"
+    title = f"[CC] {raw}"
+    return title[:_IMPORT_TITLE_MAX]
+
+
+def cmd_import(args):
+    try:
+        from core.session_manager import SessionManager
+        from core.models import ChatMessage
+    except ModuleNotFoundError as e:
+        fail(f"{e}\nhint: run from repo root with venv active.", code=2)
+
+    data = _load_export(args.from_file)
+    info = data["info"]
+    exported_messages = data["messages"]
+
+    model_info = info.get("model") or {}
+    model_label = ""
+    if model_info.get("providerID") and model_info.get("id"):
+        model_label = f"{model_info['providerID']}/{model_info['id']}"
+    elif model_info.get("id"):
+        model_label = model_info["id"]
+
+    chat_messages = []
+    for m in exported_messages:
+        m_info = m.get("info") or {}
+        role = m_info.get("role") or "assistant"
+        parts = m.get("parts") or []
+        content = _message_content(parts)
+
+        meta = {
+            "source": "claude_code_import",
+            "cc_session_id": info.get("id"),
+            "cc_message_id": m_info.get("id"),
+        }
+        ts_iso = _epoch_ms_to_iso((m_info.get("time") or {}).get("created"))
+        if ts_iso:
+            meta["timestamp"] = ts_iso
+        if content.startswith("[COMPACTACIÓN"):
+            meta["cc_compaction"] = True
+        if role == "assistant":
+            m_model = m_info.get("modelID")
+            if m_model:
+                m_provider = m_info.get("providerID")
+                meta["model"] = f"{m_provider}/{m_model}" if m_provider else m_model
+
+        chat_messages.append(ChatMessage(role=role, content=content, metadata=meta))
+
+    if not chat_messages:
+        fail(f"{args.from_file}: 0 messages after mapping — nothing to import")
+
+    session_id = str(uuid.uuid4())
+    name = _derive_title(info, args.name)
+
+    # Use SessionManager (not raw SQL) so the imported session/rows go
+    # through the same invariants (message_count, last_accessed/
+    # last_message_at, upload-reference reservation) as a live-created one.
+    manager = SessionManager()
+    session = manager.create_session(
+        session_id=session_id,
+        name=name,
+        endpoint_url="",       # no endpoint chosen yet — same "bare session"
+        model=model_label,     # shape create_session already supports for
+        owner=args.owner,      # drafts (see routes/session_routes.py skip_validation)
+    )
+    if args.folder:
+        db = SessionLocal()
+        try:
+            db_session = db.query(DbSession).filter(DbSession.id == session_id).first()
+            if db_session:
+                db_session.folder = args.folder
+                db.commit()
+        finally:
+            db.close()
+
+    ok = manager.replace_messages(session_id, chat_messages)
+    if not ok:
+        fail(f"created session {session_id} but failed to persist its {len(chat_messages)} message(s)")
+
+    emit({
+        "ok": True,
+        "session_id": session_id,
+        "name": name,
+        "owner": args.owner or "",
+        "model": model_label,
+        "message_count": len(chat_messages),
+        "source_cc_session_id": info.get("id"),
+        "source_file": str(Path(args.from_file).resolve()),
+    }, args)
+
+
 def cmd_delete(args):
     if not args.yes:
         fail("delete is irreversible — pass --yes to confirm")
@@ -145,6 +321,15 @@ def _build_parser():
     pd.add_argument("id")
     pd.add_argument("--yes", action="store_true", help="confirm deletion")
     pd.set_defaults(func=cmd_delete)
+
+    pi = sub.add_parser("import", parents=[common],
+                         help="import a compacted CC/opencode export (axon export-opencode) as a new session")
+    pi.add_argument("--from", dest="from_file", required=True,
+                     help="path to the axon export-opencode JSON file")
+    pi.add_argument("--owner", default=None, help="username to own the imported session (default: unowned)")
+    pi.add_argument("--name", default=None, help="override the derived session title")
+    pi.add_argument("--folder", default=None, help="sidebar folder to file the session under")
+    pi.set_defaults(func=cmd_import)
 
     return p
 
