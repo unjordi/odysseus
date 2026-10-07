@@ -102,6 +102,9 @@ services:
       # carril Ollama sin ruido (src/freetoken-capabilities.ts). host.docker.internal alcanza al host.
       # Ver stack/stack-unificado.md § FreeToken para por qué NO está contenerizado todavía.
       - AXON_FREETOKEN_URL=${AXON_FREETOKEN_URL:-http://host.docker.internal:7090}
+      # vLLM (video nativo) escucha en el host; su ciclo de vida lo maneja el agente de host de axon
+      # (socket en /run/axon-term) y la residencia de GPU la administra este axon serve.
+      - AXON_VLLM_HOST=${AXON_VLLM_HOST:-host.docker.internal}
       # Frontera (Anthropic). Opcional: sin key axon sigue en carril local. NUNCA horneada en la imagen.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       # Persistencia compartida con Odysseus: las sesiones que crea axon aparecen en la lista del SPA.
