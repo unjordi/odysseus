@@ -342,6 +342,21 @@ if docker compose "${FILES[@]}" -p odysseus ps --status running --services 2>/de
   fi
 fi
 
+# vLLM (bajo demanda): no corre siempre, así que no hay contenedor que revisar. Lo que sí debe existir
+# para que el serve lo administre: el agente de host (socket en el host) y la residencia (socket que el
+# serve publica en el directorio compartido). Ausentes ⇒ aviso, no falla: el stack sirve sin video nativo.
+if docker compose "${FILES[@]}" -p odysseus ps --status running --services 2>/dev/null | grep -qx axon; then
+  sock_dir="/run/user/$(id -u)/axon"
+  if [ -S "$sock_dir/host-agent.sock" ] && [ -S "$sock_dir/residencia.sock" ]; then
+    echo "✅ vllm     · agente de host y residencia de GPU publicados ($sock_dir)"
+  else
+    falta=""
+    [ -S "$sock_dir/host-agent.sock" ] || falta="agente de host (axon-host-agent.service: scripts/instalar-agente-host.sh en axon)"
+    [ -S "$sock_dir/residencia.sock" ] || falta="${falta:+$falta; }residencia (la publica axon serve al arrancar)"
+    echo "➖ vllm     · sin $falta → el video nativo (vLLM) no está disponible desde el serve"
+  fi
+fi
+
 # ── El chequeo de drift: qué commit sirve axon vs. qué está integrado ────────────────────────────────
 if [ "$CON_AXON" = 1 ]; then
   echo
