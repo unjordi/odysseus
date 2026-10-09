@@ -63,17 +63,16 @@ services:
       # Apunta al bind de arriba. Explícito: sin esto la imagen usaría /root/.ollama/models y "no habría
       # modelos" — el modo de fallo clásico al contenerizar Ollama.
       - OLLAMA_MODELS=/models
-      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_VISIBLE_DEVICES=${AXON_GPUS:-all}
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-    # GPU: MISMO patrón que ya usa el servicio `odysseus` en docker-compose.gpu-nvidia.yml (NVIDIA
-    # Container Toolkit, verificado presente en este host: runtime `nvidia` registrado en dockerd).
-    # `count: all` = las dos (RTX 5070 Ti + RTX A4000), igual que ve el daemon nativo hoy.
+    # GPU por CDI: AXON_GPUS (índice o UUID; default all). levantar-stack.sh lo fija a la GPU sana si
+    # alguna no responde (una GPU caída impide que CUDA inicialice con all).
     deploy:
       resources:
         reservations:
           devices:
-            - driver: nvidia
-              count: all
+            - driver: cdi
+              device_ids: ["nvidia.com/gpu=${AXON_GPUS:-all}"]
               capabilities: [gpu]
     healthcheck:
       # QUÉ SIGNIFICA LISTO PARA OLLAMA AQUÍ: que **VE LOS MODELOS**, no que el puerto contesta.
@@ -101,7 +100,7 @@ services:
       timeout: 5s
       retries: 12          # tras el start_period: 12 × 5 s = 60 s antes de declararlo enfermo
       # 40 s (subido de 20): el nativo contesta en 5 ms, pero eso es un daemon YA caliente. El contenedor
-      # paga además la inicialización del runtime CUDA sobre DOS GPUs (`count: all`) y el primer recorrido
+      # paga además la inicialización del runtime CUDA sobre las GPUs visibles y el primer recorrido
       # de los manifests del store de 34 GB montado. No está MEDIDO en contenedor (no se levantó nada en
       # esta pasada) → se elige por el lado seguro. No cuesta: el primer probe exitoso marca healthy y
       # termina el start_period; lo único que hace es no contar fallos mientras el runtime nace.
