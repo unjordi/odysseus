@@ -100,7 +100,7 @@ services:
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
       # NVIDIA overlay (from docker/gpu.nvidia.yml).
-      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_VISIBLE_DEVICES=${AXON_GPUS:-all}
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     healthcheck:
       # QUÉ SIGNIFICA LISTO PARA ODYSSEUS: que uvicorn ya ACEPTA requests. No "que terminó de precargar".
@@ -149,8 +149,8 @@ services:
       resources:
         reservations:
           devices:
-            - driver: nvidia
-              count: all
+            - driver: cdi
+              device_ids: ["nvidia.com/gpu=${AXON_GPUS:-all}"]
               capabilities: [gpu]
 
   chromadb:

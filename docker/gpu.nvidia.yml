@@ -23,12 +23,12 @@
 services:
   odysseus:
     environment:
-      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_VISIBLE_DEVICES=${AXON_GPUS:-all}
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     deploy:
       resources:
         reservations:
           devices:
-            - driver: nvidia
-              count: all
+            - driver: cdi
+              device_ids: ["nvidia.com/gpu=${AXON_GPUS:-all}"]
               capabilities: [gpu]

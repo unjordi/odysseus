@@ -105,6 +105,23 @@ done
 #    stack en vivo (equivale a docker-compose.yml + docker/gpu.nvidia.yml); no se cambia para no recrear
 #    todo por un cambio de forma. Los overlays SUMAN servicios; ninguno redefine lo de Odysseus.
 FILES=(-f docker-compose.gpu-nvidia.yml -f docker/gpu.tts.yml)
+
+# GPUs: AXON_GPUS fija la GPU que ven los contenedores (un id CDI: índice o UUID; default "all"). Sin
+# AXON_GPUS y con alguna GPU que no responde a nvidia-smi, se usa la única sana; con varias sanas y alguna
+# caída, la primera sana (CDI aquí toma un solo id).
+if [ -z "${AXON_GPUS:-}" ] && command -v nvidia-smi >/dev/null 2>&1; then
+  smi="$(nvidia-smi --query-gpu=uuid --format=csv,noheader 2>&1 || true)"
+  sanas="$(printf '%s\n' "$smi" | grep -E '^GPU-' || true)"
+  caidas="$(printf '%s\n' "$smi" | grep -vE '^GPU-|^$' || true)"
+  if [ -n "$caidas" ]; then
+    if [ -n "$sanas" ]; then
+      export AXON_GPUS="$(printf '%s\n' "$sanas" | head -1)"
+      echo "⚠ [stack] GPU que no responde: $caidas — los contenedores usan solo $AXON_GPUS"
+    else
+      echo "✗ [stack] ninguna GPU responde ($caidas): reinicia la máquina o corre sin GPU" >&2
+    fi
+  fi
+fi
 [ "$CON_OLLAMA" = 1 ] && FILES+=(-f docker/ollama.yml)
 [ "$CON_AXON"   = 1 ] && FILES+=(-f docker/axon.yml)
 # La arista `axon depends_on ollama (healthy)` solo tiene sentido si los DOS están en el -f. Vive en su
