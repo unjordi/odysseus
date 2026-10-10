@@ -1,6 +1,6 @@
 # widget-mstodo — conector MS To-Do (#30)
 
-> Mapeo Graph↔RemoteTodo. Conector CONSTRUIDO en rama `feat/30-mstodo-connector` (origin), NO mergeado.
+> Mapeo Graph↔RemoteTodo. Conector mergeado a develop del fork (PR #70); sus rutas siguen sin cablear.
 
 ## Estado
 - Mapeo puro Graph↔RemoteTodo ya EN develop (axon #303).
