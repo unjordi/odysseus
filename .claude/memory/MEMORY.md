@@ -6,6 +6,7 @@
 > Flujo git del fork: worktree → PR → develop (base `develop`, no `dev`). Deploy = SIEMPRE con overlay GPU:
 > `docker compose -f docker-compose.yml -f docker/gpu.nvidia.yml up -d --build odysseus`.
 
+- [estado-proyecto](estado-proyecto.md) — backlog de pendientes del fork (movido del ROADMAP de axon el 2026-10-10).
 - [que-es-odysseus](que-es-odysseus.md) — **empieza aquí:** qué es y de dónde viene — el workspace de PewDiePie con agent-loop "robado" de opencode; la UI que axon opera. Los dos "opencode" (código adaptado vs provider Zen).
 - [widget-biblioteca](widget-biblioteca/estado.md) — Biblioteca Kavita + lectura en voz alta (#31). Borrador inicial desplegado; UX = proyecto de ~1 mes.
 - [widget-cortex-widget](widget-cortex-widget/estado.md) — pestaña Cortex en Odysseus (broker read-only + knobs), vendorizada de cortex.
