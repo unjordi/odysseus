@@ -39,6 +39,9 @@ services:
     # El nombre fijo `axon-maincar` era del `docker run` suelto de antes; conservarlo aquí CHOCARÍA con
     # ese contenedor viejo ("name is already in use") y volvería a esconder que ahora es parte del stack.
     depends_on:
+      # axon-spine: única autoridad de residencia y dueño de los modelos (#43h); el serve le pide turno por el socket.
+      axon-spine:
+        condition: service_healthy
       # service_HEALTHY (subido desde `service_started`). El comentario anterior decía —con razón en su
       # momento— que "el compose de Odysseus NO le declara healthcheck al servicio odysseus, así que
       # exigir healthy colgaría el arranque para siempre". Ese impedimento YA NO EXISTE: odysseus tiene
@@ -274,4 +277,41 @@ services:
       # Node más esas tres cosas. NO MEDIDO (no se levantó): se elige por el lado seguro, y no cuesta —
       # el primer probe exitoso cierra el start_period.
       start_period: 45s
+    restart: unless-stopped
+
+  # axon spine: ÚNICA autoridad de residencia de GPU y contrato cliente↔spine (axon #43h-2d). Misma imagen y tag que
+  # `axon`. Sirve residencia.sock y spine.sock en el dir de sockets del host, que el serve del host, `axon run` y este
+  # stack comparten. Precarga los residentes de AXON_MODELOS_RESIDENTES.
+  axon-spine:
+    image: ${AXON_IMAGE:-potenciaindustrial/axon}:${AXON_IMAGE_TAG:-latest}
+    pull_policy: missing
+    command: ["./bin/axon", "spine"]
+    environment:
+      - HOME=/home/node
+      - AXON_OLLAMA_URL=${AXON_OLLAMA_URL:-http://ollama:11434}
+      - AXON_VLLM_HOST=${AXON_VLLM_HOST:-host.docker.internal}
+    volumes:
+      - ${AXON_TERM_SOCKET_DIR:-${XDG_RUNTIME_DIR:-/run/user/1000}/axon}:/run/axon-term
+      - ${AXON_STATE_DIR:-${HOME}/.axon}:/home/node/.axon
+      - ${AXON_CACHE_DIR:-${HOME}/.cache/axon}:/home/node/.cache/axon
+      # credencial OAuth de la frontera (carril frontera de /v1/turno)
+      - ${CORTEX_CLAUDE_DIR:-${HOME}/.claude}:/home/node/.claude:ro
+    working_dir: /app
+    user: "${PUID:-1000}:${PGID:-1000}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # nvidia-smi dentro del contenedor: VRAM libre y procesos de la GPU para la decisión de carga.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: cdi
+              device_ids: ["nvidia.com/gpu=${AXON_GPUS:-all}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get({socketPath:'/run/axon-term/spine.sock',path:'/v1/estado',headers:{'axon-contrato':'1'}},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
