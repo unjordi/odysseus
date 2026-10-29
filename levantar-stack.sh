@@ -220,14 +220,19 @@ if [ "$CON_AXON" = 1 ] && [ "$PUBLICAR" = 1 ]; then
   AXON_IMAGE_TAG="$(cat "$SHA_FILE")"
   [ -n "$AXON_IMAGE_TAG" ] || fatal "publish-axon.sh no dejó el sha — no despliego un tag que no puedo probar"
   export AXON_IMAGE_TAG
+  export AXON_SPINE_IMAGE_TAG="${AXON_SPINE_IMAGE_TAG:-$AXON_IMAGE_TAG}"
   echo "   → el stack va a servir axon ${AXON_IMAGE_TAG} (verifícalo después: curl -sk https://127.0.0.1:7001/api/axon/version)"
 elif [ "$CON_AXON" = 1 ]; then
   export AXON_IMAGE_TAG
+  export AXON_SPINE_IMAGE_TAG="${AXON_SPINE_IMAGE_TAG:-$AXON_IMAGE_TAG}"
   echo "═══ 1/2 · publicación OMITIDA (--sin-publicar): se consume ${AXON_IMAGE:-potenciaindustrial/axon}:${AXON_IMAGE_TAG} ═══"
   # `pull_policy: missing` (docker/axon.yml): si el tag ya está en este dockerd se usa tal cual; si no,
   # compose lo baja del registry. O sea que esta ruta funciona igual con una imagen construida aquí que
   # con una publicada por el CD desde otra máquina.
 fi
+
+# El estado de axon-spine vive en ~/.axon/spine; existe antes del `up` para que el bind de solo lectura de axon no lo cree como root.
+[ "$CON_AXON" = 1 ] && mkdir -p "${AXON_STATE_DIR:-$HOME/.axon}/spine"
 
 # ── 2/2 · el stack ──────────────────────────────────────────────────────────────────────────────────
 # SIN --remove-orphans, JAMÁS por reflejo: hoy `tts` viene de docker/gpu.tts.yml (ya en el -f de arriba),
