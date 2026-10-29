@@ -193,6 +193,8 @@ services:
       # `HOME` va declarada explícita en `environment:` arriba para que el contrato se LEA aquí y no
       # dependa de /etc/passwd de la imagen base.
       - ${AXON_STATE_DIR:-${HOME}/.axon}:/home/node/.axon
+      # el estado de spine (perfiles de vLLM, num-ctx.json, red.json) es de axon-spine: aquí solo se lee
+      - ${AXON_STATE_DIR:-${HOME}/.axon}/spine:/home/node/.axon/spine:ro
       - ${AXON_CACHE_DIR:-${HOME}/.cache/axon}:/home/node/.cache/axon
       # ── WORKING FOLDERS POR CHAT (cara Odysseus, AXON_ODYSSEUS_WORKSPACE) ────────────────────────
       # Cada chat de Odysseus corre en `~/odysseus-agents/.<sessionId>/` (real, oculto) + un symlink por
@@ -283,9 +285,10 @@ services:
   # `axon`. Sirve residencia.sock y spine.sock en el dir de sockets del host, que el serve del host, `axon run` y este
   # stack comparten. Precarga los residentes de AXON_MODELOS_RESIDENTES.
   axon-spine:
-    image: ${AXON_IMAGE:-potenciaindustrial/axon}:${AXON_IMAGE_TAG:-latest}
+    # imagen propia: solo spine, comun y config (etapa `spine` del Dockerfile de axon)
+    image: ${AXON_SPINE_IMAGE:-potenciaindustrial/axon-spine}:${AXON_SPINE_IMAGE_TAG:-latest}
     pull_policy: missing
-    command: ["./bin/axon", "spine"]
+    command: ["./bin/axon-spine"]
     environment:
       - HOME=/home/node
       - AXON_OLLAMA_URL=${AXON_OLLAMA_URL:-http://ollama:11434}
@@ -294,8 +297,6 @@ services:
       - ${AXON_TERM_SOCKET_DIR:-${XDG_RUNTIME_DIR:-/run/user/1000}/axon}:/run/axon-term
       - ${AXON_STATE_DIR:-${HOME}/.axon}:/home/node/.axon
       - ${AXON_CACHE_DIR:-${HOME}/.cache/axon}:/home/node/.cache/axon
-      # credencial OAuth de la frontera (carril frontera de /v1/turno)
-      - ${CORTEX_CLAUDE_DIR:-${HOME}/.claude}:/home/node/.claude:ro
     working_dir: /app
     user: "${PUID:-1000}:${PGID:-1000}"
     extra_hosts:
