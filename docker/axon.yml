@@ -28,6 +28,26 @@
 # imagen desde develop y hace el `up`). El detalle del comando está en ese script.
 
 services:
+  # Reranqueo de la memoria en CPU (cross-encoder bge-reranker-v2-m3 Q4_K_M, POST /v1/rerank). Existe aquí
+  # —y no solo en el host— porque el contenedor NO alcanza el `axon-reranker.service` del host, que bindea
+  # 127.0.0.1:8090: sin este servicio, la memoria del main car cae al reranqueo GENERATIVO con qwen3:4b
+  # sin fallar nada, solo ordenando peor (axon #95). `-ngl 0` ⇒ CPU: no compite por la VRAM con el cerebro.
+  # Gemelo del servicio del `docker-compose.yml` de axon; si uno cambia, el otro va en la misma tanda.
+  reranker:
+    image: ghcr.io/ggml-org/llama.cpp:server@sha256:01c2bc28d51291536df2ccebe5c6af1cdec9ea9b2bd98ac59556408caf96d3f8
+    hostname: reranker
+    command: ["--reranking", "-ngl", "0", "--host", "0.0.0.0", "--port", "8080", "-hf", "gpustack/bge-reranker-v2-m3-GGUF:Q4_K_M"]
+    volumes:
+      - reranker-modelos:/root/.cache
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      # El GGUF se baja de Hugging Face en el primer arranque: el start_period cubre esa descarga.
+      start_period: 180s
+    restart: unless-stopped
+
   axon:
     # Imagen construida por publish-axon.sh. `:latest` funciona pero es MÓVIL (no prueba nada);
     # levantar-stack.sh siempre fija el sha corto de origin/develop → el tag dice qué se desplegó.
@@ -39,6 +59,10 @@ services:
     # El nombre fijo `axon-maincar` era del `docker run` suelto de antes; conservarlo aquí CHOCARÍA con
     # ese contenedor viejo ("name is already in use") y volvería a esconder que ahora es parte del stack.
     depends_on:
+      # Sano, no solo arriba: el primer turno con memoria no debe caer al reranqueo generativo porque el
+      # cross-encoder todavía estaba bajando su GGUF.
+      reranker:
+        condition: service_healthy
       # axon-spine: única autoridad de residencia y dueño de los modelos (#43h); el serve le pide turno por el socket.
       axon-spine:
         condition: service_healthy
@@ -100,6 +124,9 @@ services:
       #   AXON_OLLAMA_URL=http://host.docker.internal:11434
       # por el .env — el extra_hosts de abajo ya deja esa vía abierta.
       - AXON_OLLAMA_URL=${AXON_OLLAMA_URL:-http://ollama:11434}
+      # Reranqueo de la memoria por el cross-encoder en CPU del servicio de arriba. Vacío ⇒ axon degrada
+      # al reranqueo generativo (qwen3:4b) SIN avisar: por eso la URL se declara aquí y no se deja al .env.
+      - AXON_MEM_RERANK_URL=${AXON_MEM_RERANK_URL:-http://reranker:8080}
       # FreeToken (motor MoE gpt-oss-120b, OpenAI-compat). Hoy vive NATIVO y BAJO DEMANDA (systemd user,
       # `disabled`): AUSENTE ES EL CASO NORMAL, no un error — axon lo detecta por /v1/models y degrada al
       # carril Ollama sin ruido (src/freetoken-capabilities.ts). host.docker.internal alcanza al host.
@@ -316,3 +343,7 @@ services:
       retries: 3
       start_period: 30s
     restart: unless-stopped
+
+volumes:
+  # GGUF del cross-encoder, bajado una vez en el primer arranque.
+  reranker-modelos:
